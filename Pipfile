@@ -15,10 +15,12 @@ black = "==19.10b0"
 # Without these lines lockfile isn't usable on multiple Python versions and platforms
 mypy = "*"
 atomicwrites = "*"
+jupyter = "*"
 
 [packages]
 # All other package requirements from setup.cfg
 bluefly = {editable = true,path = "."}
+bluesky = "*"
 
 [scripts]
 # Put coverage here so we don't interfere with debugging in the IDE
