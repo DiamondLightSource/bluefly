@@ -7,6 +7,7 @@ verify_ssl = true
 pytest-cov = "*"
 pytest-black = "*"
 pytest-flake8 = "*"
+isort = "<5.0"
 flake8-isort = "*"
 pytest-mypy = "*"
 sphinx-rtd-theme = "*"
@@ -15,12 +16,19 @@ black = "==19.10b0"
 # Without these lines lockfile isn't usable on multiple Python versions and platforms
 mypy = "*"
 atomicwrites = "*"
+# For testing bluesky things
 jupyter = "*"
+matplotlib = "*"
+databroker = "*"
+pyqt5 = "*"
+ipython = "*"
+ophyd = "*"
+bluesky = "*"
 
 [packages]
 # All other package requirements from setup.cfg
 bluefly = {editable = true,path = "."}
-bluesky = "*"
+scanpointgenerator = "*"
 
 [scripts]
 # Put coverage here so we don't interfere with debugging in the IDE
