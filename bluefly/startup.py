@@ -1,11 +1,7 @@
 from bluesky import RunEngine
 from bluesky.callbacks.best_effort import BestEffortCallback
-from bluesky.utils import install_kicker, ProgressBarManager
+from bluesky.utils import ProgressBarManager, install_kicker
 from databroker import Broker
-
-from ophyd.sim import motor
-from ophyd import StatusBase, Device
-
 
 RE = RunEngine({})
 bec = BestEffortCallback()
@@ -17,11 +13,10 @@ RE.subscribe(bec)
 install_kicker()
 
 # Create a databroker backed by temporary files
-db = Broker.named('temp')
+db = Broker.named("temp")
 
 # Insert all metadata/data captured into db.
 RE.subscribe(db.insert)
 
 # Make a progress bar
 RE.waiting_hook = ProgressBarManager()
-

@@ -9,5 +9,6 @@
     "python.formatting.provider": "black",
     "python.jediEnabled": false,
     "restructuredtext.confPath": "${workspaceFolder}/docs",
-    "python.languageServer": "Pylance"
+    "python.languageServer": "Pylance",
+    "python.pythonPath": "/home/tom/.virtualenvs/bluefly-1fc0e14f/bin/python"
 }

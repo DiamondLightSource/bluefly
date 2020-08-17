@@ -29,6 +29,7 @@ bluesky = "*"
 # All other package requirements from setup.cfg
 bluefly = {editable = true,path = "."}
 scanpointgenerator = "*"
+annotypes = "*"
 
 [scripts]
 # Put coverage here so we don't interfere with debugging in the IDE

@@ -1,7 +1,7 @@
-
 from typing import Dict
 
 from scanpointgenerator.core.compoundgenerator import CompoundGenerator
+
 from bluefly.scan import FlyScanLogic
 
 

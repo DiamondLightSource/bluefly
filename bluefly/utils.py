@@ -4,6 +4,7 @@ from typing import AsyncGenerator, Callable, Dict, Generic, Tuple, TypeVar
 
 class Status:
     "Convert asyncio Task to bluesky Status interface"
+
     def __init__(self, task: Task):
         self._task = task
         self._callbacks = []
@@ -36,6 +37,7 @@ class Status:
 
 class ReadableDevice:
     "Minimal things for a Device that can be read and paused"
+
     def __init__(self, name: str, parent=None):
         self.name = name
         self.parent = parent
@@ -63,33 +65,3 @@ class ReadableDevice:
 
     def resume(self):
         raise NotImplementedError(self)
-
-
-T = TypeVar("T")
-
-
-class CanRead(Generic[T]):
-    @property
-    async def value(self) -> T:
-        raise NotImplementedError(self)
-
-    @property
-    async def values(self) -> AsyncGenerator[T, None]:
-        raise NotImplementedError(self)
-
-
-class CanWrite(Generic[T]):
-    async def put(self, value: T) -> T:
-        raise NotImplementedError(self)
-
-
-class ChannelRO(CanRead[T]):
-    pass
-
-
-class ChannelRW(CanRead[T], CanWrite[T]):
-    pass
-
-
-class ChannelWO(CanWrite[T]):
-    pass
