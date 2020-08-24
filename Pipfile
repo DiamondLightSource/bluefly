@@ -24,6 +24,7 @@ pyqt5 = "*"
 ipython = "*"
 ophyd = "*"
 bluesky = "*"
+pytest-asyncio = "*"
 
 [packages]
 # All other package requirements from setup.cfg
