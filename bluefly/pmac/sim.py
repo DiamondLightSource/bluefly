@@ -47,7 +47,7 @@ class SimPMAC:
                 try:
                     # See if we got told to stop
                     await asyncio.wait_for(stopping.wait(), t)
-                except asyncio.exceptions.TimeoutError:
+                except asyncio.TimeoutError:
                     # Carry on
                     p.set_value(self.traj.points_scanned, i + 1)
                 else:
