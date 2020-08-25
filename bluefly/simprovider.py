@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc
-from typing import AsyncGenerator, Generic, Type, cast, get_args, get_origin
+from typing import AsyncGenerator, Generic, Type
 
 from bluesky.run_engine import get_bluesky_event_loop
 
@@ -77,12 +77,11 @@ class SimProvider(ChannelProvider):
     ) -> ChannelT:
         if channel_type is ChannelX:
             # No type, no value
-            channel = cast(ChannelT, SimChannelX())
+            return SimChannelX()  # type: ignore
         else:
-            base_channel_type = cast(Type[ChannelT], get_origin(channel_type))
-            channel_cls = lookup[base_channel_type]
-            value_type = get_args(channel_type)[0]
-            origin = get_origin(value_type)
+            channel_cls = lookup[channel_type.__origin__]  # type: ignore
+            value_type = channel_type.__args__[0]  # type: ignore
+            origin = getattr(value_type, "__origin__", None)
             if origin is None:
                 # str, bool, int, float
                 value = value_type()
@@ -94,8 +93,5 @@ class SimProvider(ChannelProvider):
                 value = origin()
             else:
                 raise ValueError(f"Can't make {channel_type}")
-            channel = cast(
-                ChannelT,
-                channel_cls(value, asyncio.Queue(loop=get_bluesky_event_loop())),
-            )
-        return channel
+            channel = channel_cls(value, asyncio.Queue(loop=get_bluesky_event_loop()))
+            return channel  # type: ignore

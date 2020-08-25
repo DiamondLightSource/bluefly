@@ -46,12 +46,17 @@ async def test_my_scan():
         assert not s.done
         await asyncio.sleep(0.75)
         assert s.done
+        # TODO: this raises CancelledError at the moment
+        # assert not s.success
         m.assert_not_called()
         scan.resume()
         s = scan.trigger()
         m = Mock()
+        done = Mock()
         s.watch(m)
+        s.add_callback(done)
         assert not s.done
+        done.assert_not_called()
         await asyncio.sleep(2.75)
         assert m.call_count == 5
         assert m.call_args_list[-1][1]["current"] == 6
@@ -59,3 +64,8 @@ async def test_my_scan():
             0.75 + 0.75 + 5 * 0.5, abs=0.3
         )
         assert s.done
+        assert s.success
+        done.assert_called_once_with(s)
+        done.reset_mock()
+        s.add_callback(done)
+        done.assert_called_once_with(s)

@@ -21,9 +21,9 @@ class Status:
     def success(self) -> bool:
         assert self.done, "Status has not completed yet"
         try:
-            # TODO: this prints a traceback if cancelled, not sure why
             self._task.result()
         except Exception:
+            # TODO: if we catch CancelledError here we can't resume. Not sure why
             return False
         else:
             return True
