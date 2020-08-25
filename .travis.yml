@@ -7,7 +7,7 @@ python:
 install:
   - env
   - pip install coveralls
-  - pipenv install -v --dev
+  - pipenv install --dev
   - ls -al ${VIRTUAL_ENV}/lib/python${TRAVIS_PYTHON_VERSION}/site-packages
   - ls -al ${VIRTUAL_ENV}/bin
   - python setup.py bdist_wheel
