@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 
 from scanpointgenerator import CompoundGenerator
 
-from bluefly.status import Status
+from bluefly.core import Device, Status
 
 
 class FlyScanLogic:
@@ -24,12 +24,10 @@ class FlyScanLogic:
 ConfigDict = Dict[str, Dict[str, Any]]
 
 
-class FlyScanDevice:
+class FlyScanDevice(Device):
     """Generic fly scan device that wraps some custom routines"""
 
-    def __init__(self, name: str, logic: FlyScanLogic, parent=None):
-        self.name = name
-        self.parent = parent
+    def __init__(self, logic: FlyScanLogic):
         self._logic = logic
         self._generator = CompoundGenerator(generators=[])
         self._when_configured = time.time()

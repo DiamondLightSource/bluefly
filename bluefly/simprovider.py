@@ -2,96 +2,149 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc
-from typing import AsyncGenerator, Generic, Type
+from typing import Any, AsyncGenerator, Callable, Dict, Mapping, TypeVar
 
 from bluesky.run_engine import get_bluesky_event_loop
 
-from bluefly.channel import (
-    Channel,
-    ChannelProvider,
-    ChannelRO,
-    ChannelRW,
-    ChannelSource,
-    ChannelT,
-    ChannelWO,
-    ChannelX,
+from .core import (
+    DeviceSignals,
+    Signal,
+    SignalDetails,
+    SignalProvider,
+    SignalR,
+    SignalRW,
+    SignalW,
+    SignalX,
     ValueT,
 )
 
 
-class HasValue(Channel, Generic[ValueT]):
-    def __init__(self, value: ValueT, q: asyncio.Queue[ValueT]):
-        self.sim_value: ValueT = value
-        self.sim_q: asyncio.Queue[ValueT] = q
+class SimSignal(Signal):
+    def __init__(self, provider: SimProvider, source: str):
+        self._provider = provider
+        self.source = source
+
+    async def connected(self) -> bool:
+        return True
 
 
-class SimChannelRO(ChannelRO[ValueT], HasValue[ValueT]):
+class SimSignalR(SignalR[ValueT], SimSignal):
     async def get(self) -> ValueT:
-        return self.sim_value
+        return await self._provider.get(self)
 
     async def observe(self) -> AsyncGenerator[ValueT, None]:
-        # Implement for a single observer, that'll do for now
-        while True:
-            yield await self.sim_q.get()
+        async for v in self._provider.observe(self):
+            yield v
 
 
-class SimChannelWO(ChannelWO[ValueT], HasValue[ValueT]):
-    """Channel that can be put to"""
+class SimSignalW(SignalW[ValueT], SimSignal):
+    """Signal that can be put to"""
 
     async def set(self, value: ValueT) -> ValueT:
-        self.sim_value = value
-        await self.sim_q.put(value)
-        return value
+        return await self._provider.set(self, value)
 
 
-class SimChannelRW(SimChannelRO, SimChannelWO, ChannelRW):
+class SimSignalRW(SimSignalR[ValueT], SimSignalW[ValueT], SignalRW[ValueT]):
     pass
 
 
+class SimSignalX(SignalX, SimSignal):
+    async def __call__(self):
+        await self._provider.call(self)
+
+
 lookup = {
-    ChannelRO: SimChannelRO,
-    ChannelWO: SimChannelWO,
-    ChannelRW: SimChannelRW,
+    SignalR: SimSignalR,
+    SignalW: SimSignalW,
+    SignalRW: SimSignalRW,
+    SignalX: SimSignalX,
 }
 
 
-class SimChannelX(ChannelX):
-    async def _call(self):
-        pass
-
-    def set_call(self, call):
-        self._call = call
-        return call
-
-    async def __call__(self):
-        await self._call()
+F = TypeVar("F", bound=Callable[..., Any])
 
 
-class SimProvider(ChannelProvider):
-    def set_value(self, channel: HasValue, value):
-        channel.sim_value = value
-        channel.sim_q.put_nowait(value)
+class SimProvider(SignalProvider):
+    def __init__(self):
+        self._on_set: Dict[int, Callable] = {}
+        self._on_call: Dict[int, Callable] = {}
+        self._values: Dict[int, Any] = {}
+        self._events: Dict[int, asyncio.Event] = {}
 
-    def make_channel(
-        self, device_id: str, source: ChannelSource, channel_type: Type[ChannelT]
-    ) -> ChannelT:
-        if channel_type is ChannelX:
-            # No type, no value
-            return SimChannelX()  # type: ignore
-        else:
-            channel_cls = lookup[channel_type.__origin__]  # type: ignore
-            value_type = channel_type.__args__[0]  # type: ignore
-            origin = getattr(value_type, "__origin__", None)
-            if origin is None:
-                # str, bool, int, float
-                value = value_type()
-            elif origin is collections.abc.Sequence:
-                # Sequence[...]
-                value = ()
-            elif origin is dict:
-                # Dict[...]
-                value = origin()
-            else:
-                raise ValueError(f"Can't make {channel_type}")
-            channel = channel_cls(value, asyncio.Queue(loop=get_bluesky_event_loop()))
-            return channel  # type: ignore
+    def on_set(self, signal: SignalW) -> Callable[[F], F]:
+        def decorator(cb: F) -> F:
+            self._on_set[id(signal)] = cb
+            return cb
+
+        return decorator
+
+    async def set(self, signal: SignalW, value) -> Any:
+        async def default_set(v):
+            self._values[id(signal)] = v
+            self._events[id(signal)].set()
+            self._events[id(signal)] = asyncio.Event()
+
+        await self._on_set.get(id(signal), default_set)(value)
+        return value
+
+    def on_call(self, signal: SignalX) -> Callable[[F], F]:
+        def decorator(cb: F) -> F:
+            self._on_call[id(signal)] = cb
+            return cb
+
+        return decorator
+
+    async def call(self, signal):
+        async def default_call():
+            return
+
+        await self._on_call.get(id(signal), default_call)()
+
+    async def get(self, signal: SignalR):
+        return self._values[id(signal)]
+
+    async def observe(self, signal: SignalR):
+        while True:
+            yield self._values[id(signal)]
+            await self._events[id(signal)].wait()
+
+    async def _connect_signals(
+        self, device_id: str, details: Dict[str, SignalDetails]
+    ) -> Mapping[str, Signal]:
+        # In CA, this would be replaced with caget of {device_id}PVI,
+        # then use the json contained in it to connect to all the
+        # channels
+        signals = {}
+        for attr_name, d in details.items():
+            signal_cls = lookup[d.signal_cls]
+            signal = signal_cls(self, f"{device_id}.{attr_name}")
+            if isinstance(signal, (SimSignalR, SimSignalW)):
+                # Need a value
+                origin = getattr(d.value_type, "__origin__", None)
+                if origin is None:
+                    # str, bool, int, float
+                    assert d.value_type
+                    value = d.value_type()
+                elif origin is collections.abc.Sequence:
+                    # Sequence[...]
+                    value = ()
+                elif origin is dict:
+                    # Dict[...]
+                    value = origin()
+                else:
+                    raise ValueError(f"Can't make {d.value_type}")
+                self._values[id(signal)] = value
+                self._events[id(signal)] = asyncio.Event(loop=get_bluesky_event_loop())
+            signals[attr_name] = signal
+        return signals
+
+    def make_signals(
+        self,
+        device_id: str,
+        details: Dict[str, SignalDetails] = {},
+        add_extra_signals=False,
+    ) -> DeviceSignals:
+        """For each signal detail listed in details, make a Signal of the given
+        base_class. If add_extra_signals then include signals not listed in details.
+        AttrName will be mapped to attr_name. Return {attr_name: signal}"""
+        return self._connect_signals(device_id, details)
