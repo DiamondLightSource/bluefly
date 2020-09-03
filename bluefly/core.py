@@ -66,11 +66,73 @@ ValueT = TypeVar(
     Dict[str, Sequence[str]],
 )
 
+Callback = Callable[["Status"], None]
+
+
+class Status(Generic[ValueT]):
+    "Convert asyncio Task to bluesky Status interface"
+
+    def __init__(
+        self,
+        awaitable: Awaitable[ValueT],
+        add_watcher: Optional[Callable[[Callable], None]] = None,
+    ):
+        # Note: this doesn't start until we await it or add callback
+        self._awaitable: Union[Awaitable[ValueT], Task[ValueT]] = awaitable
+        if isinstance(awaitable, Task):
+            awaitable.add_done_callback(self._run_callbacks)
+        self._callbacks: List[Callback] = []
+        self._add_watcher = add_watcher
+
+    def __await__(self):
+        yield from self._awaitable.__await__()
+
+    def add_callback(self, callback: Callback):
+        if not isinstance(self._awaitable, Task):
+            # If it isn't a Task, convert to one here.
+            # Don't do this in __init__ as this has a performance hit
+            self._awaitable = asyncio.create_task(self._awaitable)
+            self._awaitable.add_done_callback(self._run_callbacks)
+        if self.done:
+            callback(self)
+        else:
+            self._callbacks.append(callback)
+
+    @property
+    def done(self) -> bool:
+        assert isinstance(
+            self._awaitable, Task
+        ), "Can't get done until add_callback is called"
+        return self._awaitable.done()
+
+    @property
+    def success(self) -> bool:
+        assert self.done and isinstance(
+            self._awaitable, Task
+        ), "Status has not completed yet"
+        try:
+            self._awaitable.result()
+        except Exception:
+            # TODO: if we catch CancelledError here we can't resume. Not sure why
+            return False
+        else:
+            return True
+
+    def _run_callbacks(self, task: Task):
+        for callback in self._callbacks:
+            callback(self)
+
+    def watch(self, watcher: Callable):
+        if self._add_watcher:
+            self._add_watcher(watcher)
+
 
 class SignalR(Signal, Generic[ValueT]):
     """Signal that can be read from and monitored"""
 
     async def get(self) -> ValueT:
+        # TODO: could make this not async, but that would mean all signals
+        # would always be monitored, which is bad for performance
         raise NotImplementedError(self)
 
     async def observe(self) -> AsyncGenerator[ValueT, None]:
@@ -81,7 +143,7 @@ class SignalR(Signal, Generic[ValueT]):
 class SignalW(Signal, Generic[ValueT]):
     """Signal that can be put to"""
 
-    async def set(self, value: ValueT) -> ValueT:
+    def set(self, value: ValueT) -> Status[ValueT]:
         raise NotImplementedError(self)
 
 
@@ -263,7 +325,7 @@ class SignalCollector:
     @classmethod
     def make_signals(cls, device: DeviceWithSignals, add_extra_signals: bool):
         # Make channel details from the type
-        hints = get_type_hints(device)  # type: ignore
+        hints = get_type_hints(type(device))  # type: ignore
         signal_sources = getattr(device, "__signal_sources__", {})
         details: Dict[str, SignalDetails] = {}
         # Look for all attributes with type hints
@@ -287,44 +349,3 @@ class SignalCollector:
             self._device_signals[device] = provider.make_signals(
                 device_id, details, add_extra_signals
             )
-
-
-Callback = Callable[["Status"], None]
-
-
-class Status:
-    "Convert asyncio Task to bluesky Status interface"
-
-    def __init__(self, task: Task, add_watcher: Callable[[Callable], None]):
-        self._task = task
-        self._callbacks: List[Callback] = []
-        self._task.add_done_callback(self._run_callbacks)
-        self._add_watcher = add_watcher
-
-    @property
-    def done(self) -> bool:
-        return self._task.done()
-
-    @property
-    def success(self) -> bool:
-        assert self.done, "Status has not completed yet"
-        try:
-            self._task.result()
-        except Exception:
-            # TODO: if we catch CancelledError here we can't resume. Not sure why
-            return False
-        else:
-            return True
-
-    def add_callback(self, callback: Callback):
-        if self.done:
-            callback(self)
-        else:
-            self._callbacks.append(callback)
-
-    def _run_callbacks(self, task: Task):
-        for callback in self._callbacks:
-            callback(self)
-
-    def watch(self, watcher: Callable):
-        self._add_watcher(watcher)

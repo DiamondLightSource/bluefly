@@ -10,10 +10,9 @@ from bluefly.core import Device, Status
 
 
 class FlyScanLogic:
-    async def configure(self, generator: CompoundGenerator, completed: int = 0):
-        raise NotImplementedError(self)
-
-    async def run(self) -> AsyncGenerator[int, None]:
+    async def go(
+        self, generator: CompoundGenerator, completed: int = 0
+    ) -> AsyncGenerator[int, None]:
         raise NotImplementedError(self)
         yield 0
 
@@ -31,11 +30,13 @@ class FlyScanDevice(Device):
         self._logic = logic
         self._generator = CompoundGenerator(generators=[])
         self._when_configured = time.time()
+        self._when_triggered = time.time()
         self._when_updated = time.time()
         self._completed_steps = 0
         self._total_steps = 0
         self._watchers: List[Callable] = []
         self._trigger_task: Optional[Task] = None
+        self._pause_task: Optional[Task] = None
         self._resuming = False
 
     def configure(self, d: Dict[str, Any]) -> Tuple[ConfigDict, ConfigDict]:
@@ -75,9 +76,12 @@ class FlyScanDevice(Device):
 
     def pause(self):
         # TODO: would be good to return a Status object here
-        asyncio.get_running_loop().create_task(self._pause())
+        assert self._trigger_task, "Trigger not called"
+        self._trigger_task.cancel()
+        self._pause_task = asyncio.create_task(self._logic.stop())
 
     def resume(self):
+        assert self._pause_task.done(), "You didn't wait for pause to finish"
         self._resuming = True
 
     async def _trigger(self):
@@ -88,17 +92,8 @@ class FlyScanDevice(Device):
             self._generator.prepare()
             self._completed_steps = 0
             self._total_steps = self._generator.size
-            await self._logic.configure(self._generator, self._completed_steps)
-        await self._run()
-
-    async def _pause(self):
-        assert self._trigger_task, "Trigger not called"
-        self._trigger_task.cancel()
-        await self._logic.stop()
-        await self._logic.configure(self._generator, self._completed_steps)
-
-    async def _run(self):
-        async for step in self._logic.run():
+            self._when_triggered = time.time()
+        async for step in self._logic.go(self._generator, self._completed_steps):
             self._completed_steps = step
             self._when_updated = time.time()
             for watcher in self._watchers:
@@ -109,6 +104,6 @@ class FlyScanDevice(Device):
                     target=self._total_steps,
                     unit="",
                     precision=0,
-                    time_elapsed=self._when_updated - self._when_configured,
+                    time_elapsed=self._when_updated - self._when_triggered,
                     fraction=step / self._total_steps,
                 )

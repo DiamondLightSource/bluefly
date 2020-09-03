@@ -15,6 +15,7 @@ from .core import (
     SignalRW,
     SignalW,
     SignalX,
+    Status,
     ValueT,
 )
 
@@ -40,8 +41,8 @@ class SimSignalR(SignalR[ValueT], SimSignal):
 class SimSignalW(SignalW[ValueT], SimSignal):
     """Signal that can be put to"""
 
-    async def set(self, value: ValueT) -> ValueT:
-        return await self._provider.set(self, value)
+    def set(self, value: ValueT) -> Status[ValueT]:
+        return Status(self._provider.set(self, value))
 
 
 class SimSignalRW(SimSignalR[ValueT], SimSignalW[ValueT], SignalRW[ValueT]):
@@ -78,13 +79,16 @@ class SimProvider(SignalProvider):
 
         return decorator
 
-    async def set(self, signal: SignalW, value) -> Any:
-        async def default_set(v):
-            self._values[id(signal)] = v
-            self._events[id(signal)].set()
-            self._events[id(signal)] = asyncio.Event()
+    def default_set(self, signal: SignalW, value) -> Any:
+        self._values[id(signal)] = value
+        self._events[id(signal)].set()
+        self._events[id(signal)] = asyncio.Event()
 
-        await self._on_set.get(id(signal), default_set)(value)
+    async def set(self, signal: SignalW, value) -> Any:
+        cb = self._on_set.get(id(signal), None)
+        if cb:
+            await cb(value)
+        self.default_set(signal, value)
         return value
 
     def on_call(self, signal: SignalX) -> Callable[[F], F]:

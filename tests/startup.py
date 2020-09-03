@@ -1,13 +1,14 @@
 from bluesky import RunEngine
 from bluesky.callbacks.best_effort import BestEffortCallback
-from bluesky.plans import count
+from bluesky.plans import count, scan
 from bluesky.utils import ProgressBarManager, install_kicker
 from databroker import Broker
 from scanpointgenerator import CompoundGenerator, LineGenerator
 
-from bluefly import pmac
 from bluefly.core import SignalCollector
+from bluefly.motor import SettableMotor, sim_motor_logic
 from bluefly.myscan import MyFlyScanLogic
+from bluefly.pmac import PMAC, PMACRawMotor, sim_trajectory_logic
 from bluefly.scan import FlyScanDevice
 from bluefly.simprovider import SimProvider
 
@@ -35,19 +36,21 @@ with SignalCollector() as sc:
     sim = sc.add_provider(sim=SimProvider(), set_default=True)
     # A PMAC has a trajectory scan interface and 16 Co-ordinate systems
     # which may have motors in them
-    pmac1 = pmac.PMAC("BLxxI-MO-PMAC-01:")
-    # Raw motors assigned to a single CS
-    t1x = pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X")
-    t1y = pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y")
-    t1z = pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Z")
+    pmac1 = PMAC("BLxxI-MO-PMAC-01:")
+    # Raw motors assigned to a single CS, settable for use in step scans
+    t1x = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+    t1y = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
+    t1z = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
     # Define a flyscan that can move any combination of these 3 motors which
     # are required to be in the same CS on the pmac
-    scan = FlyScanDevice(MyFlyScanLogic(pmac1, [t1x, t1y, t1z]))
+    fly = FlyScanDevice(MyFlyScanLogic(pmac1, [t1x, t1y, t1z]))
     # Signals are connected (in a blocking way) at the end of the with block
     # and all the Devices in locals() have their names filled in
 
 # Fill in the simulated trajectory logic
-pmac.sim_trajectory_logic(sim, pmac1.traj)
+sim_trajectory_logic(sim, pmac1.traj)
+for m in (t1x, t1y, t1z):
+    sim_motor_logic(sim, m.motor)
 
 # Configure a scan
 generator = CompoundGenerator(
@@ -57,7 +60,8 @@ generator = CompoundGenerator(
     ],
     duration=0.1,
 )
-scan.configure(dict(generator=generator))
+fly.configure(dict(generator=generator))
 
 # Run a scan
-RE(count([scan]))
+RE(count([fly]))
+RE(scan([], t1x, 3, 5, 10))

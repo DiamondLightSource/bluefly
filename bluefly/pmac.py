@@ -6,10 +6,11 @@ import numpy as np
 from bluesky.run_engine import get_bluesky_event_loop
 from scanpointgenerator import CompoundGenerator
 
-from bluefly.epics_motor import EpicsMotor
+from bluefly.motor import MotorRecord, SettableMotor
 from bluefly.simprovider import SimProvider
 
 from .core import (
+    Device,
     DeviceWithSignals,
     NotConnectedError,
     SignalR,
@@ -56,18 +57,18 @@ class PMACTrajectory(DeviceWithSignals):
     program_version: SignalR[float]
 
 
-class PMAC(DeviceWithSignals):
+class PMAC(Device):
     def __init__(self, device_id: str):
-        super().__init__(device_id)
+        self.device_id = device_id
         self.cs_list = [PMACCoord(f"{device_id}CS{i+1}") for i in range(16)]
         self.traj = PMACTrajectory(f"{device_id}TRAJ")
 
 
-class PMACCompoundMotor(EpicsMotor):
+class PMACCompoundMotor(MotorRecord):
     input_link: SignalR[str]
 
 
-class PMACRawMotor(EpicsMotor):
+class PMACRawMotor(MotorRecord):
     cs_axis: SignalR[str]
     cs_port: SignalR[str]
 
@@ -106,14 +107,15 @@ class TrajectoryTracker:
         )
 
 
-async def get_cs(motors: Sequence[EpicsMotor]) -> Tuple[str, Dict[str, str]]:
+async def get_cs(motors: Sequence[SettableMotor]) -> Tuple[str, Dict[str, str]]:
     cs_ports: Set[str] = set()
     cs_axes: Dict[str, str] = {}
-    for motor in motors:
-        assert motor.name
+    for sm in motors:
+        assert sm.name
+        motor = sm.motor
         if isinstance(motor, PMACRawMotor):
             cs_ports.add(await motor.cs_port.get())
-            cs_axes[motor.name] = await motor.cs_axis.get()
+            cs_axes[sm.name] = await motor.cs_axis.get()
         else:
             raise NotImplementedError("Not handled PMAC compound motor yet")
     cs_ports_list = sorted(cs_ports)
@@ -123,7 +125,7 @@ async def get_cs(motors: Sequence[EpicsMotor]) -> Tuple[str, Dict[str, str]]:
 
 async def move_to_start(
     pmac: PMAC,
-    motors: Sequence[EpicsMotor],
+    motors: Sequence[SettableMotor],
     generator: CompoundGenerator,
     completed: int = 0,
 ):
@@ -147,7 +149,7 @@ async def move_to_start(
 
 async def build_initial_trajectory(
     pmac: PMAC,
-    motors: Sequence[EpicsMotor],
+    motors: Sequence[SettableMotor],
     generator: CompoundGenerator,
     completed: int = 0,
 ) -> TrajectoryTracker:

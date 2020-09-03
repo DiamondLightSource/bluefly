@@ -5,9 +5,10 @@ import pytest
 from bluesky.run_engine import set_bluesky_event_loop
 from scanpointgenerator import CompoundGenerator, LineGenerator
 
-from bluefly import pmac
 from bluefly.core import SignalCollector
+from bluefly.motor import SettableMotor, sim_motor_logic
 from bluefly.myscan import MyFlyScanLogic
+from bluefly.pmac import PMAC, PMACRawMotor, sim_trajectory_logic
 from bluefly.scan import FlyScanDevice
 from bluefly.simprovider import SimProvider
 
@@ -18,16 +19,16 @@ async def test_my_scan():
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
-        pmac1 = pmac.PMAC("PMAC-01:")
-        t1x = pmac.PMACRawMotor("TABLE-01:X")
-        t1y = pmac.PMACRawMotor("TABLE-01:Y")
-        t1z = pmac.PMACRawMotor("TABLE-01:Z")
+        pmac1 = PMAC("BLxxI-MO-PMAC-01:")
+        t1x = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+        t1y = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
+        t1z = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
         scan = FlyScanDevice(MyFlyScanLogic(pmac1, [t1x, t1y, t1z]))
     assert pmac1.name == "pmac1"
     assert t1x.name == "t1x"
     assert scan.name == "scan"
     # Fill in the trajectory logic
-    pmac.sim_trajectory_logic(sim, pmac1.traj)
+    sim_trajectory_logic(sim, pmac1.traj)
     # Configure a scan
     generator = CompoundGenerator(
         generators=[
@@ -82,3 +83,51 @@ async def test_my_scan():
         done.reset_mock()
         s.add_callback(done)
         done.assert_called_once_with(s)
+
+
+@pytest.mark.asyncio
+async def test_motor_moving():
+    # need to do this so SimProvider can get it for making queues
+    set_bluesky_event_loop(asyncio.get_running_loop())
+    async with SignalCollector() as sc:
+        sim = sc.add_provider(sim=SimProvider(), set_default=True)
+        x = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+    sim_motor_logic(sim, x.motor)
+
+    s = x.set(0.55)
+    m = Mock()
+    done = Mock()
+    s.add_callback(done)
+    s.watch(m)
+    assert not s.done
+    done.assert_not_called()
+    await asyncio.sleep(0.3)
+    assert not s.done
+    assert m.call_count == 3
+    await asyncio.sleep(0.3)
+    assert s.done
+    assert m.call_count == 6
+    assert m.call_args_list[1] == call(
+        name="x",
+        current=0.1,
+        initial=0.0,
+        target=0.55,
+        unit="mm",
+        precision=3,
+        time_elapsed=pytest.approx(0.1, abs=0.05),
+        fraction=1 / 5.5,
+    )
+    await x.trigger()
+    assert x.read()["x"]["value"] == 0.55
+    assert x.describe()["x"]["source"] == "BLxxI-MO-TABLE-01:X.readback"
+    assert x.read_configuration() == {}
+    assert x.describe_configuration() == {}
+    s = x.set(1.5)
+    s.add_callback(done)
+    await asyncio.sleep(0.2)
+    x.stop()
+    await asyncio.sleep(0.2)
+    assert s.done
+    with pytest.raises(RuntimeError) as cm:
+        await s
+    assert str(cm.value) == "Motor was stopped"
