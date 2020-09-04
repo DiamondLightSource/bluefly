@@ -6,10 +6,9 @@ from databroker import Broker
 from scanpointgenerator import CompoundGenerator, LineGenerator
 
 from bluefly.core import SignalCollector
-from bluefly.motor import SettableMotor, sim_motor_logic
-from bluefly.myscan import MyFlyScanLogic
+from bluefly.fly import FlyDevice, PMACMasterFlyLogic
+from bluefly.motor import MotorDevice, sim_motor_logic
 from bluefly.pmac import PMAC, PMACRawMotor, sim_trajectory_logic
-from bluefly.scan import FlyScanDevice
 from bluefly.simprovider import SimProvider
 
 RE = RunEngine({})
@@ -38,12 +37,12 @@ with SignalCollector() as sc:
     # which may have motors in them
     pmac1 = PMAC("BLxxI-MO-PMAC-01:")
     # Raw motors assigned to a single CS, settable for use in step scans
-    t1x = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
-    t1y = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
-    t1z = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
+    t1x = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+    t1y = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
+    t1z = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
     # Define a flyscan that can move any combination of these 3 motors which
     # are required to be in the same CS on the pmac
-    fly = FlyScanDevice(MyFlyScanLogic(pmac1, [t1x, t1y, t1z]))
+    fly = FlyDevice(PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
     # Signals are connected (in a blocking way) at the end of the with block
     # and all the Devices in locals() have their names filled in
 

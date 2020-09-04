@@ -6,10 +6,9 @@ from bluesky.run_engine import set_bluesky_event_loop
 from scanpointgenerator import CompoundGenerator, LineGenerator
 
 from bluefly.core import SignalCollector
-from bluefly.motor import SettableMotor, sim_motor_logic
-from bluefly.myscan import MyFlyScanLogic
+from bluefly.fly import FlyDevice, PMACMasterFlyLogic
+from bluefly.motor import MotorDevice, sim_motor_logic
 from bluefly.pmac import PMAC, PMACRawMotor, sim_trajectory_logic
-from bluefly.scan import FlyScanDevice
 from bluefly.simprovider import SimProvider
 
 
@@ -20,11 +19,10 @@ async def test_my_scan():
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
         pmac1 = PMAC("BLxxI-MO-PMAC-01:")
-        t1x = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
-        t1y = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
-        t1z = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
-        scan = FlyScanDevice(MyFlyScanLogic(pmac1, [t1x, t1y, t1z]))
-    assert pmac1.name == "pmac1"
+        t1x = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+        t1y = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
+        t1z = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
+        scan = FlyDevice(PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
     assert t1x.name == "t1x"
     assert scan.name == "scan"
     # Fill in the trajectory logic
@@ -91,7 +89,7 @@ async def test_motor_moving():
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
-        x = SettableMotor(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+        x = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
     sim_motor_logic(sim, x.motor)
 
     s = x.set(0.55)

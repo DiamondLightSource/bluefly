@@ -2,12 +2,22 @@ import asyncio
 import time
 from typing import Callable, List, Optional
 
-from bluefly.core import Device, DeviceWithSignals, SignalR, SignalRW, SignalX, Status
-from bluefly.scan import ConfigDict
+from bluefly.core import (
+    ConfigDict,
+    HasSignals,
+    SettableDevice,
+    SignalR,
+    SignalRW,
+    SignalX,
+    Status,
+)
 from bluefly.simprovider import SimProvider
 
+# Interface
+###########
 
-class MotorRecord(DeviceWithSignals):
+
+class MotorRecord(HasSignals):
     demand: SignalRW[float]
     readback: SignalR[float]
     done_move: SignalR[bool]
@@ -16,13 +26,17 @@ class MotorRecord(DeviceWithSignals):
     max_velocity: SignalRW[float]
     # Actually read/write, but shouldn't write from scanning code
     resolution: SignalR[float]
-    offset: SignalRW[float]
-    egu: SignalRW[str]
-    precision: SignalRW[float]
+    offset: SignalR[float]
+    egu: SignalR[str]
+    precision: SignalR[float]
     stop: SignalX
 
 
-class SettableMotor(Device):
+# Logic
+#######
+
+
+class MotorDevice(SettableDevice):
     def __init__(self, motor: MotorRecord):
         self.motor = motor
         self._trigger_task: Optional[asyncio.Task[float]] = None
@@ -44,12 +58,6 @@ class SettableMotor(Device):
         return {
             self.name: dict(source=self.motor.readback.source, dtype="number", shape=[])
         }
-
-    def describe_configuration(self) -> ConfigDict:
-        return {}
-
-    def read_configuration(self) -> ConfigDict:
-        return {}
 
     def set(self, new_position: float, timeout: float = None) -> Status[float]:
         start = time.time()
@@ -94,29 +102,33 @@ class SettableMotor(Device):
         asyncio.create_task(self.motor.stop())
 
 
+# Simulation
+############
+
+
 def sim_motor_logic(
     p: SimProvider, motor: MotorRecord, velocity=1, precision=3, units="mm"
 ):
-    p.default_set(motor.velocity, velocity)
-    p.default_set(motor.max_velocity, velocity)
-    p.default_set(motor.precision, precision)
-    p.default_set(motor.egu, units)
+    p.set_value(motor.velocity, velocity)
+    p.set_value(motor.max_velocity, velocity)
+    p.set_value(motor.precision, precision)
+    p.set_value(motor.egu, units)
 
     task = None
 
     @p.on_set(motor.demand)
     async def do_move(new_position):
         async def actually_do_move():
-            await p.set(motor.done_move, 0)
-            old_position = await p.get(motor.readback)
-            velocity = await p.get(motor.velocity)
+            p.set_value(motor.done_move, 0)
+            old_position = p.get_value(motor.readback)
+            velocity = p.get_value(motor.velocity)
             # Don't try to be clever, just move at a constant velocity
             move_time = (new_position - old_position) / velocity
             for i in range(int(move_time / 0.1)):
-                await p.set(motor.readback, old_position + i * 0.1 * velocity)
+                p.set_value(motor.readback, old_position + i * 0.1 * velocity)
                 await asyncio.sleep(0.1)
-            await p.set(motor.readback, new_position)
-            await p.set(motor.done_move, 1)
+            p.set_value(motor.readback, new_position)
+            p.set_value(motor.done_move, 1)
 
         nonlocal task
         task = asyncio.create_task(actually_do_move())

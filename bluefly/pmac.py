@@ -4,15 +4,15 @@ from typing import AsyncGenerator, Dict, List, Sequence, Set, Tuple
 
 import numpy as np
 from bluesky.run_engine import get_bluesky_event_loop
-from scanpointgenerator import CompoundGenerator
+from scanpointgenerator.core.point import Point
 
-from bluefly.motor import MotorRecord, SettableMotor
+from bluefly.motor import MotorDevice, MotorRecord
 from bluefly.simprovider import SimProvider
 
 from .core import (
-    Device,
-    DeviceWithSignals,
+    HasSignals,
     NotConnectedError,
+    RemainingPoints,
     SignalR,
     SignalW,
     SignalX,
@@ -23,8 +23,12 @@ from .core import (
 CS_AXES = "abcuvwxyz"
 
 
+# Interface
+###########
+
+
 @signal_sources(demands={x: f"demand_{x}" for x in CS_AXES})
-class PMACCoord(DeviceWithSignals):
+class PMACCoord(HasSignals):
     port: SignalR[str]
     demands: SignalW[Dict[str, float]]
     move_time: SignalW[float]
@@ -35,7 +39,7 @@ class PMACCoord(DeviceWithSignals):
     positions={x: f"position_{x}" for x in CS_AXES},
     use={x: f"use_{x}" for x in CS_AXES},
 )
-class PMACTrajectory(DeviceWithSignals):
+class PMACTrajectory(HasSignals):
     times: SignalW[Sequence[float]]
     velocity_modes: SignalW[Sequence[float]]
     user_programs: SignalW[Sequence[int]]
@@ -57,11 +61,11 @@ class PMACTrajectory(DeviceWithSignals):
     program_version: SignalR[float]
 
 
-class PMAC(Device):
-    def __init__(self, device_id: str):
-        self.device_id = device_id
-        self.cs_list = [PMACCoord(f"{device_id}CS{i+1}") for i in range(16)]
-        self.traj = PMACTrajectory(f"{device_id}TRAJ")
+class PMAC:
+    def __init__(self, pv_prefix: str):
+        self.pv_prefix = pv_prefix
+        self.cs_list = [PMACCoord(f"{pv_prefix}CS{i+1}") for i in range(16)]
+        self.traj = PMACTrajectory(f"{pv_prefix}TRAJ")
 
 
 class PMACCompoundMotor(MotorRecord):
@@ -72,6 +76,9 @@ class PMACRawMotor(MotorRecord):
     cs_axis: SignalR[str]
     cs_port: SignalR[str]
 
+
+# Logic
+#######
 
 BATCH_SIZE = 100
 
@@ -86,19 +93,14 @@ class TrajectoryBatch:
 
 @dataclass
 class TrajectoryTracker:
-    generator: CompoundGenerator
+    points: RemainingPoints
     cs_axes: Dict[str, str]
-    completed: int
-    offset: int
 
-    @property
-    def incomplete(self):
-        return self.completed < self.generator.size
+    def ready_for_next_batch(self, step: int):
+        return self.points.incomplete and self.points.completed < step + BATCH_SIZE
 
     def get_next_batch(self) -> TrajectoryBatch:
-        new_completed = min(self.completed + BATCH_SIZE, self.generator.size)
-        points = self.generator.get_points(self.completed, new_completed)
-        self.completed = new_completed
+        points = self.points.get_points(BATCH_SIZE)
         return TrajectoryBatch(
             times=points.duration,
             velocity_modes=np.zeros(len(points)),
@@ -107,7 +109,7 @@ class TrajectoryTracker:
         )
 
 
-async def get_cs(motors: Sequence[SettableMotor]) -> Tuple[str, Dict[str, str]]:
+async def get_cs(motors: Sequence[MotorDevice]) -> Tuple[str, Dict[str, str]]:
     cs_ports: Set[str] = set()
     cs_axes: Dict[str, str] = {}
     for sm in motors:
@@ -124,10 +126,7 @@ async def get_cs(motors: Sequence[SettableMotor]) -> Tuple[str, Dict[str, str]]:
 
 
 async def move_to_start(
-    pmac: PMAC,
-    motors: Sequence[SettableMotor],
-    generator: CompoundGenerator,
-    completed: int = 0,
+    pmac: PMAC, motors: Sequence[MotorDevice], first_point: Point,
 ):
     cs_port, cs_axes = await get_cs(motors)
     for cs in pmac.cs_list:
@@ -139,7 +138,6 @@ async def move_to_start(
             continue
     else:
         raise ValueError(f"No CS given for {cs_port!r}")
-    first_point = generator.get_point(completed)
     await cs.defer_moves.set(True)
     # TODO: insert real axis run-up calcs here
     demands = {cs_axes[axis]: value for axis, value in first_point.positions.items()}
@@ -148,15 +146,12 @@ async def move_to_start(
 
 
 async def build_initial_trajectory(
-    pmac: PMAC,
-    motors: Sequence[SettableMotor],
-    generator: CompoundGenerator,
-    completed: int = 0,
+    pmac: PMAC, motors: Sequence[MotorDevice], points: RemainingPoints,
 ) -> TrajectoryTracker:
     cs_port, cs_axes = await get_cs(motors)
     traj = pmac.traj
     await traj.cs.set(cs_port)
-    tracker = TrajectoryTracker(generator, cs_axes, completed, completed)
+    tracker = TrajectoryTracker(points, cs_axes)
     batch = tracker.get_next_batch()
     await asyncio.gather(
         traj.times.set(batch.times),
@@ -177,12 +172,11 @@ async def keep_filling_trajectory(
 ) -> AsyncGenerator[int, None]:
     traj = pmac.traj
     task = asyncio.create_task(traj.execute())
-    async for num in traj.points_scanned.observe():
-        step = num + tracker.offset
+    async for step in traj.points_scanned.observe():
         yield step
         if task.done():
             break
-        if tracker.incomplete and tracker.completed < step + BATCH_SIZE:
+        if tracker.ready_for_next_batch(step):
             # Push a new batch of points
             batch = tracker.get_next_batch()
             await asyncio.gather(
@@ -203,6 +197,10 @@ async def stop_trajectory(pmac: PMAC):
     await pmac.traj.abort()
 
 
+# Simulation
+############
+
+
 def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory):
     """Just enough of a sim to make points_scanned tick at the right rate"""
     stopping = asyncio.Event(loop=get_bluesky_event_loop())
@@ -216,10 +214,10 @@ def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory):
     @p.on_call(traj.build)
     @p.on_call(traj.append)
     async def do_build_append():
-        for t in await p.get(traj.times):
+        for t in p.get_value(traj.times):
             times.append(t)
-        await p.set(traj.build_status, "Success")
-        await p.set(traj.append_status, "Success")
+        p.set_value(traj.build_status, "Success")
+        p.set_value(traj.append_status, "Success")
 
     @p.on_call(traj.execute)
     async def do_scan():
@@ -232,10 +230,10 @@ def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory):
                 await asyncio.wait_for(stopping.wait(), t)
             except asyncio.TimeoutError:
                 # Carry on
-                await p.set(traj.points_scanned, i + 1)
+                p.set_value(traj.points_scanned, i + 1)
             else:
                 # Stop
                 status = "Aborted"
                 break
         times.clear()
-        await p.set(traj.execute_status, status)
+        p.set_value(traj.execute_status, status)

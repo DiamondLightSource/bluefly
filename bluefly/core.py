@@ -4,6 +4,7 @@ import threading
 from asyncio import Task
 from dataclasses import dataclass
 from typing import (
+    Any,
     AsyncGenerator,
     Awaitable,
     Callable,
@@ -15,6 +16,7 @@ from typing import (
     Optional,
     Sequence,
     Set,
+    Tuple,
     Type,
     TypeVar,
     Union,
@@ -22,28 +24,8 @@ from typing import (
 )
 
 from bluesky.run_engine import get_bluesky_event_loop
-
-
-class NotConnectedError(Exception):
-    """Raised when a Signal get, set, observe or call happens and it is not connected"""
-
-
-def _fail(*args, **kwargs):
-    raise ValueError(
-        "Can't compare two Signals, did you mean await signal.get() instead?"
-    )
-
-
-class Signal:
-    """Signals are like ophyd Signals, but async"""
-
-    source: str  # like ca://DEVICE_PREFIX:SIGNAL or panda://172.23.252.201/PCAP/ARM
-
-    async def connected(self) -> bool:
-        raise NotImplementedError(self)
-
-    __lt__ = __le__ = __eq__ = __ge__ = __gt__ = __ne__ = _fail
-
+from scanpointgenerator import CompoundGenerator
+from scanpointgenerator.core.point import Point, Points
 
 # Would love to write this recursively, but I don't think you can
 ValueT = TypeVar(
@@ -127,6 +109,23 @@ class Status(Generic[ValueT]):
             self._add_watcher(watcher)
 
 
+def _fail(*args, **kwargs):
+    raise ValueError(
+        "Can't compare two Signals, did you mean await signal.get() instead?"
+    )
+
+
+class Signal:
+    """Signals are like ophyd Signals, but async"""
+
+    source: str  # like ca://PV_PREFIX:SIGNAL or panda://172.23.252.201/PCAP/ARM
+
+    async def connected(self) -> bool:
+        raise NotImplementedError(self)
+
+    __lt__ = __le__ = __eq__ = __ge__ = __gt__ = __ne__ = _fail
+
+
 class SignalR(Signal, Generic[ValueT]):
     """Signal that can be read from and monitored"""
 
@@ -156,6 +155,10 @@ class SignalX(Signal):
 
     async def __call__(self):
         raise NotImplementedError(self)
+
+
+class NotConnectedError(Exception):
+    """Raised when a Signal get, set, observe or call happens and it is not connected"""
 
 
 SignalSource = Union[str, Dict[str, str]]
@@ -192,58 +195,50 @@ class SignalDetails(Generic[ValueT]):
         return details
 
 
-DeviceSignals = Awaitable[Mapping[str, Signal]]
+AwaitableSignals = Awaitable[Mapping[str, Signal]]
 
 
 class SignalProvider:
     def make_signals(
         self,
-        device_id: str,
+        signal_prefix: str,
         details: Dict[str, SignalDetails] = {},
         add_extra_signals=False,
-    ) -> DeviceSignals:
+    ) -> AwaitableSignals:
         """For each signal detail listed in details, make a Signal of the given
         base_class. If add_extra_signals then include signals not listed in details.
         AttrName will be mapped to attr_name. Return {attr_name: signal}"""
         raise NotImplementedError(self)
 
 
-class Device:
-    # Human readable name, as required by Bluesky, set by Context
-    name: Optional[str] = None
-    parent = None
+class HasSignals:
+    # obj id, like ca://BLxxI-MO-PMAC-01: or panda://172.23.252.201:8888/
+    signal_prefix: str
 
-
-class DeviceWithSignals(Device):
-    # Device id, like ca://BLxxI-MO-PMAC-01: or panda://172.23.252.201:8888/
-    device_id: str
-    # If you want all the Signals that this device has, change this to True
-    _add_extra_signals = False
-
-    def __init__(self, device_id: str):
-        self.device_id = device_id
-        SignalCollector.make_signals(self, self._add_extra_signals)
+    def __init__(self, signal_prefix: str):
+        self.signal_prefix = signal_prefix
+        SignalCollector.make_signals(self, add_extra_signals=True)
 
 
 SignalProviderT = TypeVar("SignalProviderT", bound=SignalProvider)
 
 
 class SignalCollector:
-    """Collector of Signals from Devices to be used as a context manager:
+    """Collector of Signals from Signalobjes to be used as a context manager:
 
     with SignalCollector() as sc:
         sc.add_provider(ca=CAProvider(), set_default=True)
-        sc.add_provider(panda=PandAProvider())
-
-        t1x = EpicsMotor("BLxxI-MO-TABLE-01:X")
-        t1y = EpicsMotor("BLxxI-MO-TABLE-01:Y")
+        t1x = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:X"))
+        t1y = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:Y"))
         pmac1 = PMAC("BLxxI-MO-PMAC-01")
         im = PCODetector("BLxxI-EA-DET-01")
         diff = PilatusDetector("BLxxI-EA-DET-02")
-        tomo_scan = FlyScanDevice(
-            PmacMasterLogic(pmac=pmac1, motors=[t1x, t1y], detectors=[im, diff])
+        tomo_scan = FlyDevice(
+            PmacMasterFlyLogic(pmac=pmac1, motors=[t1x, t1y], detectors=[im, diff])
         )
+        # Signals get connected and Devices get named at the end of the Context
     assert t1x.name == "t1x"
+    assert t1x.motor.velocity.connected
     """
 
     _instance: ClassVar[Optional["SignalCollector"]] = None
@@ -251,7 +246,7 @@ class SignalCollector:
     def __init__(self):
         self._providers: Dict[str, SignalProvider] = {}
         self._names_on_enter: Set[str] = set()
-        self._device_signals: Dict[DeviceWithSignals, DeviceSignals] = {}
+        self._object_signals: Dict[HasSignals, AwaitableSignals] = {}
 
     def _caller_locals(self):
         """Walk up until we find a stack frame that doesn't have us as self"""
@@ -285,8 +280,8 @@ class SignalCollector:
                 # We got a device, name it
                 obj.name = name
         SignalCollector._instance = None
-        # Populate all the devices
-        awaitables = (self._populate_device(device) for device in self._device_signals)
+        # Populate all the Signalobjes
+        awaitables = (self._populate_signals(obj) for obj in self._object_signals)
         await asyncio.gather(*awaitables)
 
     def __exit__(self, type, value, traceback):
@@ -298,14 +293,14 @@ class SignalCollector:
         fut.add_done_callback(lambda _: event.set())
         event.wait()
 
-    async def _populate_device(self, device: DeviceWithSignals):
-        signals = await self._device_signals[device]
+    async def _populate_signals(self, obj: HasSignals):
+        signals = await self._object_signals[obj]
         for attr_name, signal in signals.items():
             assert not hasattr(
-                device, attr_name
-            ), f"{device} already has attr {attr_name}: {getattr(device, attr_name)}"
-            setattr(device, attr_name, signal)
-        return device
+                obj, attr_name
+            ), f"{obj} already has attr {attr_name}: {getattr(obj, attr_name)}"
+            setattr(obj, attr_name, signal)
+        return obj
 
     @classmethod
     def _get_current_context(cls) -> "SignalCollector":
@@ -323,10 +318,10 @@ class SignalCollector:
         return provider
 
     @classmethod
-    def make_signals(cls, device: DeviceWithSignals, add_extra_signals: bool):
+    def make_signals(cls, obj: HasSignals, add_extra_signals: bool):
         # Make channel details from the type
-        hints = get_type_hints(type(device))  # type: ignore
-        signal_sources = getattr(device, "__signal_sources__", {})
+        hints = get_type_hints(type(obj))  # type: ignore
+        signal_sources = getattr(obj, "__signal_sources__", {})
         details: Dict[str, SignalDetails] = {}
         # Look for all attributes with type hints
         for attr_name, ann in hints.items():
@@ -340,12 +335,75 @@ class SignalCollector:
 
         if details or add_extra_signals:
             self = cls._get_current_context()
-            split = device.device_id.split("://", 1)
+            split = obj.signal_prefix.split("://", 1)
             if len(split) > 1:
-                transport, device_id = split
+                transport, signal_prefix = split
             else:
-                transport, device_id = "", split[0]
+                transport, signal_prefix = "", split[0]
             provider = self._providers[transport]
-            self._device_signals[device] = provider.make_signals(
-                device_id, details, add_extra_signals
+            self._object_signals[obj] = provider.make_signals(
+                signal_prefix, details, add_extra_signals
             )
+
+
+ConfigDict = Dict[str, Dict[str, Any]]
+
+
+class Device:
+    # Human readable name, as required by Bluesky, set by Context
+    name: Optional[str] = None
+    parent = None
+
+    def configure(self, d: Dict[str, Any]) -> Tuple[ConfigDict, ConfigDict]:
+        pass
+
+    def read_configuration(self) -> ConfigDict:
+        return {}
+
+    def describe_configuration(self) -> ConfigDict:
+        return {}
+
+    def read(self) -> ConfigDict:
+        return {}
+
+    def describe(self) -> ConfigDict:
+        return {}
+
+    def trigger(self) -> Status:
+        status = Status(asyncio.sleep(0))
+        return status
+
+    # Can also add stage, unstage, pause, resume
+
+
+class SettableDevice(Device):
+    def set(self, new_position: float, timeout: float = None) -> Status[float]:
+        raise NotImplementedError(self)
+
+    def stop(self, *, success=False):
+        raise NotImplementedError(self)
+
+
+class RemainingPoints:
+    """CompoundGenerator prepared with progress indicator"""
+
+    def __init__(self, spg: CompoundGenerator, completed: int):
+        self.spg = spg
+        self.completed = completed
+
+    def peek_point(self) -> Point:
+        return self.spg.get_point(self.completed)
+
+    def get_points(self, num) -> Points:
+        new_completed = min(self.completed + num, self.spg.size)
+        points = self.spg.get_points(self.completed, new_completed)
+        self.completed = new_completed
+        return points
+
+    @property
+    def incomplete(self):
+        return self.completed < self.spg.size
+
+    @property
+    def size(self):
+        return self.spg.size
