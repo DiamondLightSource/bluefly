@@ -1,7 +1,5 @@
 import asyncio
 import time
-from asyncio.exceptions import CancelledError
-from asyncio.tasks import Task
 from typing import Callable, List, Optional
 
 from bluefly.core import Device, DeviceWithSignals, SignalR, SignalRW, SignalX, Status
@@ -27,7 +25,7 @@ class MotorRecord(DeviceWithSignals):
 class SettableMotor(Device):
     def __init__(self, motor: MotorRecord):
         self.motor = motor
-        self._trigger_task: Optional[Task[float]] = None
+        self._trigger_task: Optional[asyncio.Task[float]] = None
         self._set_success = True
 
     def trigger(self) -> Status[float]:
@@ -124,7 +122,7 @@ def sim_motor_logic(
         task = asyncio.create_task(actually_do_move())
         try:
             await task
-        except CancelledError:
+        except asyncio.CancelledError:
             pass
 
     @p.on_call(motor.stop)
