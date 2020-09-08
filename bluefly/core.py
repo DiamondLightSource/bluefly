@@ -134,7 +134,7 @@ class SignalR(Signal, Generic[ValueT]):
         # would always be monitored, which is bad for performance
         raise NotImplementedError(self)
 
-    async def observe(self) -> AsyncGenerator[ValueT, None]:
+    async def observe(self, timeout=None) -> AsyncGenerator[ValueT, None]:
         raise NotImplementedError(self)
         yield
 
@@ -350,7 +350,7 @@ ConfigDict = Dict[str, Dict[str, Any]]
 
 
 class Device:
-    # Human readable name, as required by Bluesky, set by Context
+    # Human readable name, as required by Bluesky, set by SignalCollector
     name: Optional[str] = None
     parent = None
 

@@ -1,13 +1,11 @@
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncGenerator, Dict, List, Sequence, Set, Tuple
+from typing import AsyncGenerator, Dict, Sequence, Set, Tuple
 
 import numpy as np
-from bluesky.run_engine import get_bluesky_event_loop
-from scanpointgenerator.core.point import Point
+from scanpointgenerator import Point
 
 from bluefly.motor import MotorDevice, MotorRecord
-from bluefly.simprovider import SimProvider
 
 from .core import (
     HasSignals,
@@ -21,10 +19,6 @@ from .core import (
 
 # 9 axes in a PMAC co-ordinate system
 CS_AXES = "abcuvwxyz"
-
-
-# Interface
-###########
 
 
 @signal_sources(demands={x: f"demand_{x}" for x in CS_AXES})
@@ -76,9 +70,6 @@ class PMACRawMotor(MotorRecord):
     cs_axis: SignalR[str]
     cs_port: SignalR[str]
 
-
-# Logic
-#######
 
 BATCH_SIZE = 100
 
@@ -145,6 +136,11 @@ async def move_to_start(
     await cs.defer_moves.set(False)
 
 
+async def check_traj_success(status, message):
+    if not await status.get() == "Success":
+        raise ValueError(await message.get())
+
+
 async def build_initial_trajectory(
     pmac: PMAC, motors: Sequence[MotorDevice], points: RemainingPoints,
 ) -> TrajectoryTracker:
@@ -162,8 +158,7 @@ async def build_initial_trajectory(
         traj.use.set({x: x in batch.positions for x in CS_AXES}),
     )
     await traj.build()
-    if not await traj.build_status.get() == "Success":
-        raise ValueError(await traj.build_message.get())
+    await check_traj_success(traj.build_status, traj.build_message)
     return tracker
 
 
@@ -187,53 +182,9 @@ async def keep_filling_trajectory(
                 traj.points_to_build.set(len(batch.times)),
             )
             await traj.append()
-            if not await traj.append_status.get() == "Success":
-                raise ValueError(await traj.append_message.get())
-    if not await traj.execute_status.get() == "Success":
-        raise ValueError(await traj.execute_message.get())
+            await check_traj_success(traj.append_status, traj.append_message)
+    await check_traj_success(traj.execute_status, traj.execute_message)
 
 
 async def stop_trajectory(pmac: PMAC):
     await pmac.traj.abort()
-
-
-# Simulation
-############
-
-
-def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory):
-    """Just enough of a sim to make points_scanned tick at the right rate"""
-    stopping = asyncio.Event(loop=get_bluesky_event_loop())
-    times: List[float] = []
-
-    @p.on_call(traj.abort)
-    async def do_abort():
-        stopping.set()
-        times.clear()
-
-    @p.on_call(traj.build)
-    @p.on_call(traj.append)
-    async def do_build_append():
-        for t in p.get_value(traj.times):
-            times.append(t)
-        p.set_value(traj.build_status, "Success")
-        p.set_value(traj.append_status, "Success")
-
-    @p.on_call(traj.execute)
-    async def do_scan():
-        # Do a fake scan that takes the right time
-        stopping.clear()
-        status = "Success"
-        for i, t in enumerate(times):
-            try:
-                # See if we got told to stop
-                await asyncio.wait_for(stopping.wait(), t)
-            except asyncio.TimeoutError:
-                # Carry on
-                p.set_value(traj.points_scanned, i + 1)
-            else:
-                # Stop
-                status = "Aborted"
-                break
-        times.clear()
-        p.set_value(traj.execute_status, status)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc
-from typing import Any, AsyncGenerator, Callable, Dict, Mapping, TypeVar
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Mapping, TypeVar
 
 from bluesky.run_engine import get_bluesky_event_loop
 
@@ -19,8 +19,8 @@ from .core import (
     ValueT,
 )
 
-SetCallback = Callable[[Any], None]
-CallCallback = Callable[[], None]
+SetCallback = Callable[[Any], Awaitable[None]]
+CallCallback = Callable[[], Awaitable[None]]
 
 
 class _SimStore:
@@ -49,11 +49,11 @@ class SimSignalR(SignalR[ValueT], SimSignal):
     async def get(self) -> ValueT:
         return self._store.values[id(self)]
 
-    async def observe(self) -> AsyncGenerator[ValueT, None]:
+    async def observe(self, timeout=None) -> AsyncGenerator[ValueT, None]:
         id_self = id(self)
         while True:
             yield self._store.values[id_self]
-            await self._store.events[id_self].wait()
+            await asyncio.wait_for(self._store.events[id_self].wait(), timeout)
 
 
 class SimSignalW(SignalW[ValueT], SimSignal):

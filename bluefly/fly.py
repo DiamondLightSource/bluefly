@@ -22,12 +22,13 @@ class FlyLogic:
     async def scan(
         self, points: RemainingPoints, offset: int
     ) -> AsyncGenerator[int, None]:
-        """Scan the given points, putting them at offset into file"""
+        """Scan the given points, putting them at offset into file. Iterator counts
+        from 1 to points.size"""
         raise NotImplementedError(self)
         yield 0
 
     async def stop(self):
-        """Stop where you are, without retracing"""
+        """Stop where you are, without retracing or closing files"""
         raise NotImplementedError(self)
 
     async def close(self):

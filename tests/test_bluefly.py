@@ -1,14 +1,24 @@
 import asyncio
-from unittest.mock import Mock, call, patch
+import os
+import time
+from unittest.mock import ANY, Mock, call, patch
 
+import h5py
+import numpy as np
 import pytest
 from bluesky.run_engine import set_bluesky_event_loop
 from scanpointgenerator import CompoundGenerator, LineGenerator
 
+from bluefly import (
+    areadetector,
+    areadetector_sim,
+    fly,
+    motor,
+    motor_sim,
+    pmac,
+    pmac_sim,
+)
 from bluefly.core import SignalCollector
-from bluefly.fly import FlyDevice, PMACMasterFlyLogic
-from bluefly.motor import MotorDevice, sim_motor_logic
-from bluefly.pmac import PMAC, PMACRawMotor, sim_trajectory_logic
 from bluefly.simprovider import SimProvider
 
 
@@ -18,15 +28,15 @@ async def test_my_scan():
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
-        pmac1 = PMAC("BLxxI-MO-PMAC-01:")
-        t1x = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
-        t1y = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
-        t1z = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
-        scan = FlyDevice(PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
+        pmac1 = pmac.PMAC("BLxxI-MO-PMAC-01:")
+        t1x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+        t1y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
+        t1z = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
+        scan = fly.FlyDevice(fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
     assert t1x.name == "t1x"
     assert scan.name == "scan"
     # Fill in the trajectory logic
-    sim_trajectory_logic(sim, pmac1.traj)
+    pmac_sim.sim_trajectory_logic(sim, pmac1.traj)
     # Configure a scan
     generator = CompoundGenerator(
         generators=[
@@ -89,8 +99,8 @@ async def test_motor_moving():
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
-        x = MotorDevice(PMACRawMotor("BLxxI-MO-TABLE-01:X"))
-    sim_motor_logic(sim, x.motor)
+        x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+    motor_sim.sim_motor_logic(sim, x.motor)
 
     s = x.set(0.55)
     m = Mock()
@@ -129,3 +139,75 @@ async def test_motor_moving():
     with pytest.raises(RuntimeError) as cm:
         await s
     assert str(cm.value) == "Motor was stopped"
+
+
+@pytest.mark.asyncio
+async def test_areadetector_step_scan():
+    # need to do this so SimProvider can get it for making queues
+    set_bluesky_event_loop(asyncio.get_running_loop())
+    async with SignalCollector() as sc:
+        sim = sc.add_provider(sim=SimProvider(), set_default=True)
+        scheme = areadetector.FilenameScheme()
+        det = areadetector.DetectorDevice(
+            areadetector.AndorLogic(
+                areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
+                areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
+            ),
+            scheme,
+        )
+        x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
+        y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
+    motor_sim.sim_motor_logic(sim, x.motor)
+    motor_sim.sim_motor_logic(sim, y.motor)
+    areadetector_sim.sim_detector_logic(
+        sim, det.logic.driver, det.logic.hdf, x.motor, y.motor
+    )
+
+    assert det.stage() == [det]
+    assert scheme.file_path is None
+    det.configure(dict(exposure=1.0))
+    now = time.time()
+    await det.trigger()
+    assert time.time() - now == pytest.approx(1.0, abs=0.1)
+    assert det.read()["det"]["value"] == 394720
+    docs = list(det.collect_asset_docs())
+    assert docs == [
+        (
+            "resource",
+            {
+                "path_semantics": "posix",
+                "resource_kwargs": {"frame_per_point": 1},
+                "resource_path": "det.h5",
+                "root": scheme.file_path,
+                "spec": "AD_HDF5_SWMR",
+                "uid": ANY,
+            },
+        ),
+        (
+            "datum",
+            {"datum_id": ANY, "datum_kwargs": {"point_number": 0}, "resource": ANY},
+        ),
+    ]
+    assert docs[1][1]["resource"] == docs[0][1]["uid"]
+    assert docs[1][1]["datum_id"] == docs[0][1]["uid"] + "/0"
+    fname = os.path.join(docs[0][1]["root"], docs[0][1]["resource_path"])
+    f = h5py.File(fname)
+    assert f["/entry/sum"].shape == (1, 1, 1)
+    assert f["/entry/data/data"].shape == (1, 240, 320)
+    assert f["/entry/sum"][0][0][0] == 394720
+    assert np.sum(f["/entry/data/data"][0]) == 394720
+    await x.set(3)
+    await det.trigger()
+    assert det.read()["det"]["value"] == 4892728
+    docs2 = list(det.collect_asset_docs())
+    assert docs2 == [
+        (
+            "datum",
+            {"datum_id": ANY, "datum_kwargs": {"point_number": 1}, "resource": ANY},
+        )
+    ]
+    assert docs2[0][1]["datum_id"] == docs[0][1]["uid"] + "/1"
+    assert f["/entry/sum"].shape == (2, 1, 1)
+    assert f["/entry/data/data"].shape == (2, 240, 320)
+    assert f["/entry/sum"][1][0][0] == 4892728
+    assert np.sum(f["/entry/data/data"][1]) == 4892728

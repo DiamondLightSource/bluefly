@@ -22,7 +22,7 @@ generic FlyScanDevice that wraps user-written FlyScanLogic classes.
 Let's start at the top. The interface up to bluesky is a ReadableDevice
 with the following interface:
 
-.. codeblock:: python
+.. code-block:: python
 
     fly_device = FlyScanDevice(MyFlyScanLogic(motor=..., detectors=...))
     # This means "tell your devices you are about to take data"
@@ -30,7 +30,7 @@ with the following interface:
     # do anything about it yet
     fly_device.stage()
     # Store the flyscan trajectory and duration of each point
-    # Doesn't need to be done many times if the fly_device is the same
+    # Doesn't need to be done many times if the trajectory is the same
     generator = CompoundGenerator(
         generators=[
             LineGenerator("ty", "mm", 0, 1, 2),
