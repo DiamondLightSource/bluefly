@@ -28,7 +28,7 @@ RE.subscribe(bec)
 install_kicker()
 
 # Create a databroker backed by temporary files
-db = Broker.named("temp")
+db = Broker.named("mycat")
 
 # Insert all metadata/data captured into db.
 RE.subscribe(db.insert)
@@ -80,4 +80,5 @@ mapping.configure(dict(generator=generator))
 
 # Run a scan
 # RE(count([mapping]))
+# RE(scan([det], t1x, 3, 5, 10))
 RE(grid_scan([det], t1x, 3, 5, 10, t1y, 2, 4, 8))

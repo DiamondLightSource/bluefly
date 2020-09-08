@@ -169,7 +169,7 @@ async def test_areadetector_step_scan():
     now = time.time()
     await det.trigger()
     assert time.time() - now == pytest.approx(1.0, abs=0.1)
-    assert det.read()["det"]["value"] == 394720
+    assert det.read()["det_sum"]["value"] == 394720
     docs = list(det.collect_asset_docs())
     assert docs == [
         (
@@ -179,7 +179,7 @@ async def test_areadetector_step_scan():
                 "resource_kwargs": {"frame_per_point": 1},
                 "resource_path": "det.h5",
                 "root": scheme.file_path,
-                "spec": "AD_HDF5_SWMR",
+                "spec": "AD_HDF5",
                 "uid": ANY,
             },
         ),
@@ -198,7 +198,7 @@ async def test_areadetector_step_scan():
     assert np.sum(f["/entry/data/data"][0]) == 394720
     await x.set(3)
     await det.trigger()
-    assert det.read()["det"]["value"] == 4892728
+    assert det.read()["det_sum"]["value"] == 4892728
     docs2 = list(det.collect_asset_docs())
     assert docs2 == [
         (

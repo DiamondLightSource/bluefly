@@ -114,11 +114,15 @@ class DetectorLogic:
 class DetectorDevice(Device):
     def __init__(self, logic: DetectorLogic, scheme: FilenameScheme):
         self.logic = logic
+        self.hints: Dict[str, Any] = {}
         self._when_configured = time.time()
         self._when_updated = time.time()
         self._exposure = 0.1
         self._watchers: List[Callable] = []
+        # Summary value
         self._value = 0.0
+        # Data id
+        self._id = ""
         self._datasets: Optional[DatasetDetails] = None
         self._asset_docs_cache: List[Tuple] = []
         self._datum_factory = None
@@ -157,15 +161,25 @@ class DetectorDevice(Device):
         return [self]
 
     def read(self) -> ConfigDict:
-        assert self.name, self
         return {
-            self.name: dict(value=self._value, timestamp=self._when_updated),
+            self._data_name(): dict(value=self._id, timestamp=self._when_updated),
+            self._summary_name(): dict(value=self._value, timestamp=self._when_updated),
         }
 
     def describe(self) -> ConfigDict:
-        assert self.name, self
+        assert self._datasets, self
+        self.hints = dict(fields=[self._summary_name()])
         return {
-            self.name: dict(dtype="number", shape=[], source="an HDF file"),
+            self._data_name(): dict(
+                external="FILESTORE:",
+                dtype="array",
+                # TODO: shouldn't have to add the extra dim here to be compatible with AD
+                shape=(1,) + self._datasets.data_shape,
+                source="an HDF file",
+            ),
+            self._summary_name(): dict(
+                dtype="number", shape=[], source="an HDF file", precision=0
+            ),
         }
 
     def unstage(self) -> List[Device]:
@@ -191,7 +205,7 @@ class DetectorDevice(Device):
             datasets = await self.logic.open(details)
             resource, self._datum_factory, _ = compose_resource(
                 start=dict(uid="will be popped below"),
-                spec="AD_HDF5_SWMR",
+                spec="AD_HDF5",
                 root=details.file_path,
                 resource_path=details.full_path()[len(details.file_path) :],
                 resource_kwargs=dict(frame_per_point=1),
@@ -210,7 +224,7 @@ class DetectorDevice(Device):
                         initial=0,
                         target=self._exposure,
                         unit="s",
-                        precision=1,
+                        precision=3,
                         time_elapsed=elapsed,
                         fraction=elapsed / self._exposure,
                     )
@@ -223,6 +237,7 @@ class DetectorDevice(Device):
             self._when_updated = time.time()
             datum = self._datum_factory(datum_kwargs=dict(point_number=self._offset))
             self._asset_docs_cache.append(("datum", datum))
+            self._id = datum["datum_id"]
         self._offset += 1
         t.cancel()
 

@@ -25,6 +25,9 @@ pyqt5 = "*"
 ipython = "*"
 ophyd = "*"
 bluesky = "*"
+suitcase = "*"
+suitcase-jsonl = "*"
+area-detector-handlers = "*"
 
 [packages]
 # All other package requirements from setup.cfg
