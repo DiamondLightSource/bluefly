@@ -76,7 +76,7 @@ def sim_detector_logic(
         exposure = p.get_value(driver.acquire_time)
         period = p.get_value(driver.acquire_period)
         for i in range(p.get_value(driver.num_images)):
-            await asyncio.sleep(exposure)
+            await asyncio.sleep(period)
             uid = i + offset
             # Resize the datasets so they fit
             for path in (DATA_PATH, SUM_PATH, UID_PATH):

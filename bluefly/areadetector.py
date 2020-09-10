@@ -76,7 +76,7 @@ class FileDetails:
 class DatasetDetails:
     data_shape: Tuple[int, ...]  # Fastest moving last, e.g. (768, 1024)
     data_suffix: str = "_data"
-    data_path: str = "/entry/data"
+    data_path: str = "/entry/data/data"
     summary_suffix: str = "_sum"
     summary_path: str = "/entry/sum"
 
@@ -86,11 +86,16 @@ class DetectorLogic:
         """Open files, etc"""
         raise NotImplementedError(self)
 
+    async def trigger(self, num: int, offset: int, mode: DetectorMode, exposure: float):
+        """Trigger collection of num points, arranging for them to put them at offset
+        into file. Exposure not used in gated mode"""
+        raise NotImplementedError(self)
+
     async def collect(
-        self, num: int, offset: int, mode: DetectorMode, exposure: float
+        self, num: int, offset: int, exposure: float
     ) -> AsyncGenerator[float, None]:
-        """Collect num points, putting them at offset into file. Iterator gives a
-        "summary value" for each frame. Exposure not used in gated mode"""
+        """Return the data collected from trigger. Iterator gives a "summary value"
+        for each frame."""
         raise NotImplementedError(self)
         yield 0
 
@@ -106,15 +111,10 @@ class DetectorLogic:
         """Close any files"""
         raise NotImplementedError(self)
 
-    def collect_assets(self):
-        """Something about datasets in HDF files"""
-        raise NotImplementedError(self)
-
 
 class DetectorDevice(Device):
     def __init__(self, logic: DetectorLogic, scheme: FilenameScheme):
         self.logic = logic
-        self.hints: Dict[str, Any] = {}
         self._when_configured = time.time()
         self._when_updated = time.time()
         self._exposure = 0.1
@@ -166,15 +166,18 @@ class DetectorDevice(Device):
             self._summary_name(): dict(value=self._value, timestamp=self._when_updated),
         }
 
+    @property
+    def hints(self):
+        return dict(fields=[self._summary_name()])
+
     def describe(self) -> ConfigDict:
         assert self._datasets, self
-        self.hints = dict(fields=[self._summary_name()])
         return {
             self._data_name(): dict(
                 external="FILESTORE:",
                 dtype="array",
-                # TODO: shouldn't have to add the extra dim here to be compatible with AD
-                shape=(1,) + self._datasets.data_shape,
+                # TODO: shouldn't have to add extra dim here to be compatible with AD
+                shape=(1,) + tuple(self._datasets.data_shape),
                 source="an HDF file",
             ),
             self._summary_name(): dict(
@@ -188,6 +191,7 @@ class DetectorDevice(Device):
         return [self]
 
     def trigger(self) -> Status:
+        print("trigger")
         self._trigger_task = asyncio.create_task(self._trigger())
         status = Status(self._trigger_task, self._watchers.append)
         return status
@@ -230,10 +234,10 @@ class DetectorDevice(Device):
                     )
                 await asyncio.sleep(0.1)
 
+        await self.logic.trigger(1, self._offset, DetectorMode.SOFTWARE, self._exposure)
         t = asyncio.create_task(update_watchers())
-        async for self._value in self.logic.collect(
-            1, self._offset, DetectorMode.SOFTWARE, self._exposure
-        ):
+        async for self._value in self.logic.collect(1, self._offset, self._exposure):
+            print(self._offset)
             self._when_updated = time.time()
             datum = self._datum_factory(datum_kwargs=dict(point_number=self._offset))
             self._asset_docs_cache.append(("datum", datum))
@@ -242,6 +246,7 @@ class DetectorDevice(Device):
         t.cancel()
 
     def collect_asset_docs(self):
+        print("collect")
         items = self._asset_docs_cache.copy()
         self._asset_docs_cache.clear()
         for item in items:
@@ -267,9 +272,6 @@ async def open_hdf_file(hdf: HDFWriter, file_details: FileDetails) -> asyncio.Ta
 async def hdf_flush_and_observe(
     hdf: HDFWriter, num: int, exposure: float
 ) -> AsyncGenerator[int, None]:
-    # Zero the array counter so we can see when we get frames
-    await hdf.array_counter.set(0)
-
     async def flush_every_second():
         while True:
             await asyncio.sleep(1)
@@ -291,7 +293,7 @@ async def hdf_flush_and_observe(
 
 
 async def setup_n_frames(
-    driver: DetectorDriver, num: int, offset: int, exposure: float
+    driver: DetectorDriver, hdf: HDFWriter, num: int, offset: int, exposure: float
 ):
     if num == 1:
         image_mode = "Single"
@@ -302,6 +304,8 @@ async def setup_n_frames(
         driver.num_images.set(num),
         driver.acquire_time.set(exposure),
         driver.array_counter.set(offset - 1),
+        # Zero the array counter so we can see when we get frames
+        hdf.array_counter.set(0),
     )
 
 
@@ -326,15 +330,13 @@ class AndorLogic(DetectorLogic):
         self._hdf_start_task = await open_hdf_file(self.hdf, file_details)
         self._hdf_path = file_details.full_path()
         return DatasetDetails(
-            data_shape=(
-                await self.driver.array_size_y.get(),
-                await self.driver.array_size_x.get(),
+            data_shape=await asyncio.gather(
+                self.driver.array_size_y.get(), self.driver.array_size_x.get(),
             ),
         )
 
-    async def collect(
-        self, num: int, offset: int, mode: DetectorMode, exposure: float
-    ) -> AsyncGenerator[float, None]:
+    async def trigger(self, num: int, offset: int, mode: DetectorMode, exposure: float):
+        # Choose the right Andor specific trigger mode
         await self.driver.trigger_mode.set(
             {
                 DetectorMode.SOFTWARE: "Software",
@@ -342,15 +344,19 @@ class AndorLogic(DetectorLogic):
                 DetectorMode.GATED: "Gate",
             }[mode]
         )
-        await setup_n_frames(self.driver, num, offset, exposure)
+        # Setup driver and HDF writer for n frames
+        await setup_n_frames(self.driver, self.hdf, num, offset, exposure)
         # Need to overwrite here for this driver in particular
-        period = exposure + await self.get_trigger_period(exposure)
-        await self.driver.acquire_period.set(period)
-        # Kick off the driver and monitor progress
-        t = asyncio.create_task(self.driver.start())
+        await self.driver.acquire_period.set(await self.get_trigger_period(exposure))
+        # Kick off the driver to take data
+        asyncio.create_task(self.driver.start())
+
+    async def collect(
+        self, num: int, offset: int, exposure: float
+    ) -> AsyncGenerator[float, None]:
+        # monitor progress
         async for i in hdf_flush_and_observe(self.hdf, num, exposure):
             yield float(h5py.File(self._hdf_path, "r")["/entry/sum"][i + offset][0][0])
-        await t
 
     async def get_trigger_period(self, exposure: float) -> float:
         # Might need to prod the driver to do these calcs

@@ -169,7 +169,7 @@ async def test_areadetector_step_scan():
     now = time.time()
     await det.trigger()
     assert time.time() - now == pytest.approx(1.0, abs=0.1)
-    assert det.read()["det_sum"]["value"] == 394720
+    assert det.read()["det_sum"]["value"] == 819984.0
     docs = list(det.collect_asset_docs())
     assert docs == [
         (
@@ -191,14 +191,14 @@ async def test_areadetector_step_scan():
     assert docs[1][1]["resource"] == docs[0][1]["uid"]
     assert docs[1][1]["datum_id"] == docs[0][1]["uid"] + "/0"
     fname = os.path.join(docs[0][1]["root"], docs[0][1]["resource_path"])
-    f = h5py.File(fname)
+    f = h5py.File(fname, "r")
     assert f["/entry/sum"].shape == (1, 1, 1)
     assert f["/entry/data/data"].shape == (1, 240, 320)
-    assert f["/entry/sum"][0][0][0] == 394720
-    assert np.sum(f["/entry/data/data"][0]) == 394720
+    assert f["/entry/sum"][0][0][0] == 819984.0
+    assert np.sum(f["/entry/data/data"][0]) == 819984.0
     await x.set(3)
     await det.trigger()
-    assert det.read()["det_sum"]["value"] == 4892728
+    assert det.read()["det_sum"]["value"] == 9726824.0
     docs2 = list(det.collect_asset_docs())
     assert docs2 == [
         (
@@ -209,5 +209,5 @@ async def test_areadetector_step_scan():
     assert docs2[0][1]["datum_id"] == docs[0][1]["uid"] + "/1"
     assert f["/entry/sum"].shape == (2, 1, 1)
     assert f["/entry/data/data"].shape == (2, 240, 320)
-    assert f["/entry/sum"][1][0][0] == 4892728
-    assert np.sum(f["/entry/data/data"][1]) == 4892728
+    assert f["/entry/sum"][1][0][0] == 9726824.0
+    assert np.sum(f["/entry/data/data"][1]) == 9726824.0

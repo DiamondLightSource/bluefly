@@ -3,6 +3,7 @@ from bluesky.callbacks.best_effort import BestEffortCallback
 from bluesky.plans import grid_scan
 from bluesky.utils import ProgressBarManager, install_kicker
 from databroker import Broker
+from IPython import get_ipython
 from scanpointgenerator import CompoundGenerator, LineGenerator
 
 from bluefly import (
@@ -77,6 +78,8 @@ generator = CompoundGenerator(
     duration=0.1,
 )
 mapping.configure(dict(generator=generator))
+
+get_ipython().magic("matplotlib qt")
 
 # Run a scan
 # RE(count([mapping]))
