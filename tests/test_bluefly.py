@@ -36,7 +36,7 @@ async def test_my_scan():
     assert t1x.name == "t1x"
     assert scan.name == "scan"
     # Fill in the trajectory logic
-    pmac_sim.sim_trajectory_logic(sim, pmac1.traj)
+    pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x.motor, b=t1y.motor)
     # Configure a scan
     generator = CompoundGenerator(
         generators=[
@@ -63,6 +63,7 @@ async def test_my_scan():
             time_elapsed=pytest.approx(0.5, abs=0.2),
             fraction=1 / 6,
         )
+        assert await t1x.motor.readback.get() == 1.5
         scan.pause()
         m.reset_mock()
         assert not s.done
@@ -87,6 +88,7 @@ async def test_my_scan():
         )
         assert s.done
         assert s.success
+        assert await t1x.motor.readback.get() == 2.0
         done.assert_called_once_with(s)
         done.reset_mock()
         s.add_callback(done)

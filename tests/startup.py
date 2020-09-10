@@ -1,6 +1,6 @@
 from bluesky import RunEngine
 from bluesky.callbacks.best_effort import BestEffortCallback
-from bluesky.plans import grid_scan
+from bluesky.plans import count, grid_scan
 from bluesky.utils import ProgressBarManager, install_kicker
 from databroker import Broker
 from IPython import get_ipython
@@ -27,6 +27,7 @@ RE.subscribe(bec)
 
 # Make plots update live while scans run.
 install_kicker()
+get_ipython().magic("matplotlib qt")
 
 # Create a databroker backed by temporary files
 db = Broker.named("mycat")
@@ -69,19 +70,16 @@ areadetector_sim.sim_detector_logic(
     sim, andor_logic.driver, andor_logic.hdf, t1x.motor, t1y.motor
 )
 
-# Configure a scan
+# Run a step scan
+RE(grid_scan([det], t1x, 3, 5, 10, t1y, 2, 4, 8))
+
+# Run a fly scan
 generator = CompoundGenerator(
     generators=[
-        LineGenerator("t1y", "mm", 0, 1, 2),
-        LineGenerator("t1x", "mm", 1, 2, 20),
+        LineGenerator("t1y", "mm", 2, 4, 8),
+        LineGenerator("t1x", "mm", 3, 5, 10),
     ],
     duration=0.1,
 )
 mapping.configure(dict(generator=generator))
-
-get_ipython().magic("matplotlib qt")
-
-# Run a scan
-# RE(count([mapping]))
-# RE(scan([det], t1x, 3, 5, 10))
-RE(grid_scan([det], t1x, 3, 5, 10, t1y, 2, 4, 8))
+RE(count([mapping]))

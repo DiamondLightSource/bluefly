@@ -68,9 +68,6 @@ def sim_detector_logic(
 
     @p.on_call(driver.start)
     async def do_driver_start():
-        assert (
-            p.get_value(driver.trigger_mode) == "Software"
-        ), "Not done hardware triggered scanning yet"
         # areaDetector drivers start from array_counter + 1
         offset = p.get_value(driver.array_counter) + 1
         exposure = p.get_value(driver.acquire_time)

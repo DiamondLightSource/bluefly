@@ -191,7 +191,6 @@ class DetectorDevice(Device):
         return [self]
 
     def trigger(self) -> Status:
-        print("trigger")
         self._trigger_task = asyncio.create_task(self._trigger())
         status = Status(self._trigger_task, self._watchers.append)
         return status
@@ -237,7 +236,6 @@ class DetectorDevice(Device):
         await self.logic.trigger(1, self._offset, DetectorMode.SOFTWARE, self._exposure)
         t = asyncio.create_task(update_watchers())
         async for self._value in self.logic.collect(1, self._offset, self._exposure):
-            print(self._offset)
             self._when_updated = time.time()
             datum = self._datum_factory(datum_kwargs=dict(point_number=self._offset))
             self._asset_docs_cache.append(("datum", datum))
@@ -246,7 +244,6 @@ class DetectorDevice(Device):
         t.cancel()
 
     def collect_asset_docs(self):
-        print("collect")
         items = self._asset_docs_cache.copy()
         self._asset_docs_cache.clear()
         for item in items:

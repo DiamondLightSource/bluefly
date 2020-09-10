@@ -108,7 +108,7 @@ async def get_cs(motors: Sequence[MotorDevice]) -> Tuple[str, Dict[str, str]]:
         motor = sm.motor
         if isinstance(motor, PMACRawMotor):
             cs_ports.add(await motor.cs_port.get())
-            cs_axes[sm.name] = await motor.cs_axis.get()
+            cs_axes[sm.name] = (await motor.cs_axis.get()).lower()
         else:
             raise NotImplementedError("Not handled PMAC compound motor yet")
     cs_ports_list = sorted(cs_ports)

@@ -112,11 +112,12 @@ class SimProvider(SignalProvider):
 
         return decorator
 
-    def get_value(self, signal: SimSignal) -> Any:
+    def get_value(self, signal: SignalR[ValueT]) -> ValueT:
         return self._store.values[id(signal)]
 
-    def set_value(self, signal: Signal, value) -> Any:
+    def set_value(self, signal: SignalR[ValueT], value: ValueT) -> ValueT:
         self._store.set_value(id(signal), value)
+        return value
 
     async def _connect_signals(
         self, box_id: str, details: Dict[str, SignalDetails]
