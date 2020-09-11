@@ -1,8 +1,10 @@
 import asyncio
+import os
 import sys
 import threading
 from asyncio import Task
 from dataclasses import dataclass
+from tempfile import mkdtemp
 from typing import (
     Any,
     AsyncGenerator,
@@ -401,9 +403,42 @@ class RemainingPoints:
         return points
 
     @property
-    def incomplete(self):
-        return self.completed < self.spg.size
+    def constant_duration(self) -> float:
+        assert self.spg.duration, "Scan point generator has variable duration"
+        return self.spg.duration
 
     @property
-    def size(self):
+    def remaining(self) -> int:
+        return self.spg.size - self.completed
+
+    @property
+    def size(self) -> int:
         return self.spg.size
+
+
+@dataclass
+class FileDetails:
+    file_path: str
+    file_template: str
+    file_name: str
+
+    def full_path(self):
+        # TODO: this need windows/linux path conversion, etc.
+        return self.file_template % (self.file_path, self.file_name)
+
+
+class FilenameScheme:
+    file_path: Optional[str] = None
+    file_template: str = "%s%s.h5"
+
+    async def new_scan(self):
+        self.file_path = mkdtemp() + os.sep
+
+
+@dataclass
+class DatasetDetails:
+    data_shape: Tuple[int, ...]  # Fastest moving last, e.g. (768, 1024)
+    data_suffix: str = "_data"
+    data_path: str = "/entry/data/data"
+    summary_suffix: str = "_sum"
+    summary_path: str = "/entry/sum"

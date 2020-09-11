@@ -9,6 +9,7 @@ from scanpointgenerator import CompoundGenerator, LineGenerator
 from bluefly import (
     areadetector,
     areadetector_sim,
+    detector,
     fly,
     motor,
     motor_sim,
@@ -32,8 +33,15 @@ get_ipython().magic("matplotlib qt")
 # Create a databroker backed by temporary files
 db = Broker.named("mycat")
 
+
+def spy(name, doc):
+    if name == "resource":
+        print(doc)
+
+
 # Insert all metadata/data captured into db.
 RE.subscribe(db.insert)
+RE.subscribe(spy)
 
 # Make a progress bar
 RE.waiting_hook = ProgressBarManager()
@@ -49,29 +57,28 @@ with SignalCollector() as sc:
     t1y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
     t1z = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
     # Simulated detector
-    scheme = areadetector.FilenameScheme()
+    scheme = detector.FilenameScheme()
     andor_logic = areadetector.AndorLogic(
         areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
         areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
     )
-
-    det = areadetector.DetectorDevice(andor_logic, scheme)
+    andor = detector.DetectorDevice(andor_logic, scheme)
     # Define a flyscan that can move any combination of these 3 motors which
     # are required to be in the same CS on the pmac
-    mapping = fly.FlyDevice(fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
+    mapping = fly.FlyDevice(
+        fly.PMACMasterFlyLogic(pmac1, [andor], [t1x, t1y, t1z]), scheme
+    )
     # Signals are connected (in a blocking way) at the end of the with block
     # and all the Devices in locals() have their names filled in
 
 # Fill in the simulated logic
-pmac_sim.sim_trajectory_logic(sim, pmac1.traj)
+pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x, b=t1y)
 for m in (t1x, t1y, t1z):
-    motor_sim.sim_motor_logic(sim, m.motor)
-areadetector_sim.sim_detector_logic(
-    sim, andor_logic.driver, andor_logic.hdf, t1x.motor, t1y.motor
-)
+    motor_sim.sim_motor_logic(sim, m)
+areadetector_sim.sim_detector_logic(sim, andor_logic.driver, andor_logic.hdf, t1x, t1y)
 
 # Run a step scan
-RE(grid_scan([det], t1x, 3, 5, 10, t1y, 2, 4, 8))
+RE(grid_scan([andor], t1x, 3, 5, 10, t1y, 2, 4, 8))
 
 # Run a fly scan
 generator = CompoundGenerator(

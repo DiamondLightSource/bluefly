@@ -2,9 +2,10 @@ import asyncio
 
 import h5py
 import numpy as np
+from bluesky.run_engine import get_bluesky_event_loop
 
 from bluefly.areadetector import DetectorDriver, HDFWriter
-from bluefly.motor import MotorRecord
+from bluefly.motor import MotorDevice
 from bluefly.simprovider import SimProvider
 
 
@@ -33,11 +34,12 @@ def sim_detector_logic(
     p: SimProvider,
     driver: DetectorDriver,
     hdf: HDFWriter,
-    x: MotorRecord,
-    y: MotorRecord,
+    x: MotorDevice,
+    y: MotorDevice,
     width: int = 320,
     height: int = 240,
 ):
+    stopping = asyncio.Event(loop=get_bluesky_event_loop())
     # The detector image we will modify for each image (0..255 range)
     blob = make_gaussian_blob(width, height) * 255
     hdf_file = None
@@ -68,24 +70,31 @@ def sim_detector_logic(
 
     @p.on_call(driver.start)
     async def do_driver_start():
+        stopping.clear()
         # areaDetector drivers start from array_counter + 1
         offset = p.get_value(driver.array_counter) + 1
         exposure = p.get_value(driver.acquire_time)
         period = p.get_value(driver.acquire_period)
         for i in range(p.get_value(driver.num_images)):
-            await asyncio.sleep(period)
+            try:
+                # See if we got told to stop
+                await asyncio.wait_for(stopping.wait(), period)
+            except asyncio.TimeoutError:
+                # Carry on
+                pass
+            else:
+                # Stop now
+                break
             uid = i + offset
             # Resize the datasets so they fit
             for path in (DATA_PATH, SUM_PATH, UID_PATH):
                 ds = hdf_file[path]
                 expand_to = tuple(max(*z) for z in zip((uid + 1, 1, 1), ds.shape))
                 ds.resize(expand_to)
-            intensity = (
-                interesting_pattern(p.get_value(x.readback), p.get_value(y.readback))
-                * exposure
-                / period
+            intensity = interesting_pattern(
+                p.get_value(x.motor.readback), p.get_value(y.motor.readback)
             )
-            detector_data = (blob * intensity).astype(np.uint8)
+            detector_data = (blob * intensity * exposure / period).astype(np.uint8)
             hdf_file[DATA_PATH][uid] = detector_data
             hdf_file[UID_PATH][uid] = uid
             hdf_file[SUM_PATH][uid] = np.sum(detector_data)
@@ -100,3 +109,7 @@ def sim_detector_logic(
     @p.on_call(hdf.stop)
     async def do_hdf_close():
         hdf_file.close()
+
+    @p.on_call(driver.stop)
+    async def do_driver_stop():
+        stopping.set()

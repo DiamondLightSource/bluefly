@@ -3,11 +3,12 @@ from typing import Dict, List
 
 from bluesky.run_engine import get_bluesky_event_loop
 
+from bluefly.motor import MotorDevice
 from bluefly.pmac import CS_AXES, PMACRawMotor, PMACTrajectory
 from bluefly.simprovider import SimProvider
 
 
-def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory, **motors: PMACRawMotor):
+def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory, **motors: MotorDevice):
     """Just enough of a sim to make points_scanned tick at the right rate"""
     stopping = asyncio.Event(loop=get_bluesky_event_loop())
     times: List[float] = []
@@ -15,7 +16,8 @@ def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory, **motors: PMACRaw
 
     for cs_axis, motor in motors.items():
         assert cs_axis in CS_AXES, f"{cs_axis} should be one of {CS_AXES}"
-        p.set_value(motor.cs_axis, cs_axis.upper())
+        assert isinstance(motor.motor, PMACRawMotor), motor.motor
+        p.set_value(motor.motor.cs_axis, cs_axis.upper())
 
     @p.on_call(traj.abort)
     async def do_abort():
@@ -42,7 +44,7 @@ def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory, **motors: PMACRaw
         for i, t in enumerate(times):
             for cs_axis, use in p.get_value(traj.use).items():
                 if use and cs_axis in motors:
-                    p.set_value(motors[cs_axis].readback, positions[cs_axis][i])
+                    p.set_value(motors[cs_axis].motor.readback, positions[cs_axis][i])
             try:
                 # See if we got told to stop
                 await asyncio.wait_for(stopping.wait(), t)

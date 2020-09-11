@@ -12,6 +12,7 @@ from scanpointgenerator import CompoundGenerator, LineGenerator
 from bluefly import (
     areadetector,
     areadetector_sim,
+    detector,
     fly,
     motor,
     motor_sim,
@@ -23,7 +24,7 @@ from bluefly.simprovider import SimProvider
 
 
 @pytest.mark.asyncio
-async def test_my_scan():
+async def test_fly_scan():
     # need to do this so SimProvider can get it for making queues
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector() as sc:
@@ -32,11 +33,22 @@ async def test_my_scan():
         t1x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
         t1y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
         t1z = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
-        scan = fly.FlyDevice(fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
+        scheme = detector.FilenameScheme()
+        det = detector.DetectorDevice(
+            areadetector.AndorLogic(
+                areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
+                areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
+            ),
+            scheme,
+        )
+        scan = fly.FlyDevice(
+            fly.PMACMasterFlyLogic(pmac1, [det], [t1x, t1y, t1z]), scheme
+        )
     assert t1x.name == "t1x"
     assert scan.name == "scan"
     # Fill in the trajectory logic
-    pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x.motor, b=t1y.motor)
+    areadetector_sim.sim_detector_logic(sim, det.logic.driver, det.logic.hdf, t1x, t1y)
+    pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x, b=t1y)
     # Configure a scan
     generator = CompoundGenerator(
         generators=[
@@ -52,8 +64,7 @@ async def test_my_scan():
         s.watch(m)
         assert not s.done
         await asyncio.sleep(0.75)
-        assert m.call_count == 2  # 0..1
-        assert m.call_args_list[-1] == call(
+        m.assert_called_once_with(
             name="scan",
             current=1,
             initial=0,
@@ -81,14 +92,14 @@ async def test_my_scan():
         assert not s.done
         done.assert_not_called()
         await asyncio.sleep(2.75)
-        assert m.call_count == 6  # 1..6
+        assert s.done
+        assert s.success
+        assert await t1x.motor.readback.get() == 2.0
+        assert m.call_count == 5  # 2..6
         assert m.call_args_list[-1][1]["current"] == 6
         assert m.call_args_list[-1][1]["time_elapsed"] == pytest.approx(
             0.75 + 0.75 + 5 * 0.5, abs=0.3
         )
-        assert s.done
-        assert s.success
-        assert await t1x.motor.readback.get() == 2.0
         done.assert_called_once_with(s)
         done.reset_mock()
         s.add_callback(done)
@@ -102,7 +113,7 @@ async def test_motor_moving():
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
         x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
-    motor_sim.sim_motor_logic(sim, x.motor)
+    motor_sim.sim_motor_logic(sim, x)
 
     s = x.set(0.55)
     m = Mock()
@@ -149,8 +160,8 @@ async def test_areadetector_step_scan():
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector() as sc:
         sim = sc.add_provider(sim=SimProvider(), set_default=True)
-        scheme = areadetector.FilenameScheme()
-        det = areadetector.DetectorDevice(
+        scheme = detector.FilenameScheme()
+        det = detector.DetectorDevice(
             areadetector.AndorLogic(
                 areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
                 areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
@@ -159,11 +170,9 @@ async def test_areadetector_step_scan():
         )
         x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
         y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
-    motor_sim.sim_motor_logic(sim, x.motor)
-    motor_sim.sim_motor_logic(sim, y.motor)
-    areadetector_sim.sim_detector_logic(
-        sim, det.logic.driver, det.logic.hdf, x.motor, y.motor
-    )
+    motor_sim.sim_motor_logic(sim, x)
+    motor_sim.sim_motor_logic(sim, y)
+    areadetector_sim.sim_detector_logic(sim, det.logic.driver, det.logic.hdf, x, y)
 
     assert det.stage() == [det]
     assert scheme.file_path is None

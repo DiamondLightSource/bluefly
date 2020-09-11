@@ -19,12 +19,15 @@ fly scanning in the style of Malcolm, updated to use type hints and asyncio.
 It separates interface classes from logic functions, and provides a
 generic FlyScanDevice that wraps user-written FlyScanLogic classes.
 
+FlyScanDevice
+~~~~~~~~~~~~~
+
 Let's start at the top. The interface up to bluesky is a ReadableDevice
 with the following interface:
 
 .. code-block:: python
 
-    fly_device = FlyScanDevice(MyFlyScanLogic(motor=..., detectors=...))
+    fly_device = FlyScanDevice(MyFlyScanLogic(detectors=..., motor=...))
     # This means "tell your devices you are about to take data"
     # Detectors flag that they should open a new file, but don't
     # do anything about it yet
@@ -58,3 +61,30 @@ with the following interface:
     # When we're done we trigger a file close
     fly_device.unstage()
 
+This device can be nested inside other scans. This allows for instance a series
+of flying mapping scans within a step scanned energy scan.
+
+Writing the logic
+~~~~~~~~~~~~~~~~~
+
+Each flyscan has an element of uniqueness, so is backed by Logic that can do the
+stages of
+
+DetectorDevice
+~~~~~~~~~~~~~~
+
+Detectors are SWMR HDF writing devices that are step scannable. They are backed
+
+
+FlyScanLogic
+~~~~~~~~~~~~
+
+Flyscans typically have
+
+MotorDevice
+~~~~~~~~~~~
+
+Moving down a level, we have the concepts of Motors. A Motor is
+like an ophyd EpicsMotor, it can be step scanned, and produces its value
+on read(). However, a trajectory scan is not performed at the level of a single
+motor, so it must be wrapped into

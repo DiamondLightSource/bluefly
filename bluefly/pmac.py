@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncGenerator, Dict, Sequence, Set, Tuple
+from typing import Dict, Sequence, Set, Tuple
 
 import numpy as np
 from scanpointgenerator import Point
@@ -88,7 +88,7 @@ class TrajectoryTracker:
     cs_axes: Dict[str, str]
 
     def ready_for_next_batch(self, step: int):
-        return self.points.incomplete and self.points.completed < step + BATCH_SIZE
+        return self.points.remaining and self.points.completed < step + BATCH_SIZE
 
     def get_next_batch(self) -> TrajectoryBatch:
         points = self.points.get_points(BATCH_SIZE)
@@ -162,13 +162,10 @@ async def build_initial_trajectory(
     return tracker
 
 
-async def keep_filling_trajectory(
-    pmac: PMAC, tracker: TrajectoryTracker
-) -> AsyncGenerator[int, None]:
+async def keep_filling_trajectory(pmac: PMAC, tracker: TrajectoryTracker):
     traj = pmac.traj
     task = asyncio.create_task(traj.execute())
     async for step in traj.points_scanned.observe():
-        yield step
         if task.done():
             break
         if tracker.ready_for_next_batch(step):
