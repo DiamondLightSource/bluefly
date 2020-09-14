@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Sequence
 
 import h5py
 
@@ -139,14 +139,14 @@ class AndorLogic(DetectorLogic):
 
     async def collect(
         self, num: int, offset: int, timeout: float
-    ) -> AsyncGenerator[float, None]:
+    ) -> AsyncGenerator[Sequence[float], None]:
         # monitor progress
         async for i in hdf_flush_and_observe(self.hdf, num, timeout):
             dset = h5py.File(self._hdf_path, "r")["/entry/sum"]
             while dset.shape[0] <= i + offset:
                 await asyncio.sleep(0.1)
                 dset.id.refresh()
-            yield float(dset[i + offset][0][0])
+            yield [float(dset[i + offset][0][0])]
 
     async def get_deadtime(self, exposure: float) -> float:
         # Might need to prod the driver to do these calcs

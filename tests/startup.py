@@ -1,6 +1,6 @@
+import bluesky.plans as bp
 from bluesky import RunEngine
 from bluesky.callbacks.best_effort import BestEffortCallback
-from bluesky.plans import count, grid_scan
 from bluesky.utils import ProgressBarManager, install_kicker
 from databroker import Broker
 from IPython import get_ipython
@@ -66,7 +66,7 @@ with SignalCollector() as sc:
     # Define a flyscan that can move any combination of these 3 motors which
     # are required to be in the same CS on the pmac
     mapping = fly.FlyDevice(
-        fly.PMACMasterFlyLogic(pmac1, [andor], [t1x, t1y, t1z]), scheme
+        [andor], fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]), scheme
     )
     # Signals are connected (in a blocking way) at the end of the with block
     # and all the Devices in locals() have their names filled in
@@ -78,7 +78,7 @@ for m in (t1x, t1y, t1z):
 areadetector_sim.sim_detector_logic(sim, andor_logic.driver, andor_logic.hdf, t1x, t1y)
 
 # Run a step scan
-RE(grid_scan([andor], t1x, 3, 5, 10, t1y, 2, 4, 8))
+RE(bp.grid_scan([andor], t1x, 3, 5, 10, t1y, 2, 4, 8))
 
 # Run a fly scan
 generator = CompoundGenerator(
@@ -89,4 +89,4 @@ generator = CompoundGenerator(
     duration=0.1,
 )
 mapping.configure(dict(generator=generator))
-RE(count([mapping]))
+RE(bp.fly([mapping]))

@@ -42,7 +42,7 @@ async def test_fly_scan():
             scheme,
         )
         scan = fly.FlyDevice(
-            fly.PMACMasterFlyLogic(pmac1, [det], [t1x, t1y, t1z]), scheme
+            [det], fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]), scheme
         )
     assert t1x.name == "t1x"
     assert scan.name == "scan"
@@ -60,7 +60,8 @@ async def test_fly_scan():
     scan.configure(dict(generator=generator))
     with patch("bluefly.pmac.BATCH_SIZE", 4):
         m = Mock()
-        s = scan.trigger()
+        await scan.kickoff()
+        s = scan.complete()
         s.watch(m)
         assert not s.done
         await asyncio.sleep(0.75)
@@ -84,7 +85,8 @@ async def test_fly_scan():
         # assert not s.success
         m.assert_not_called()
         scan.resume()
-        s = scan.trigger()
+        await scan.kickoff()
+        s = scan.complete()
         m = Mock()
         done = Mock()
         s.watch(m)
@@ -94,12 +96,12 @@ async def test_fly_scan():
         await asyncio.sleep(2.75)
         assert s.done
         assert s.success
-        assert await t1x.motor.readback.get() == 2.0
         assert m.call_count == 5  # 2..6
         assert m.call_args_list[-1][1]["current"] == 6
         assert m.call_args_list[-1][1]["time_elapsed"] == pytest.approx(
             0.75 + 0.75 + 5 * 0.5, abs=0.3
         )
+        assert await t1x.motor.readback.get() == 2.0
         done.assert_called_once_with(s)
         done.reset_mock()
         s.add_callback(done)

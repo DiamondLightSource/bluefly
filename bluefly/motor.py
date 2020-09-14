@@ -39,14 +39,14 @@ class MotorDevice(SettableDevice):
         return Status(self._trigger_task)
 
     def read(self) -> ConfigDict:
-        assert self.name, "Motor not named"
         assert self._trigger_task, "trigger() not called"
+        assert self.name
         return {
             self.name: dict(value=self._trigger_task.result(), timestamp=time.time())
         }
 
     def describe(self) -> ConfigDict:
-        assert self.name, "Motor not named"
+        assert self.name
         return {
             self.name: dict(source=self.motor.readback.source, dtype="number", shape=[])
         }

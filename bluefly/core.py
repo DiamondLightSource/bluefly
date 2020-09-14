@@ -1,10 +1,9 @@
 import asyncio
-import os
+import logging
 import sys
 import threading
 from asyncio import Task
 from dataclasses import dataclass
-from tempfile import mkdtemp
 from typing import (
     Any,
     AsyncGenerator,
@@ -97,6 +96,7 @@ class Status(Generic[ValueT]):
         try:
             self._awaitable.result()
         except Exception:
+            logging.exception("Failed status")
             # TODO: if we catch CancelledError here we can't resume. Not sure why
             return False
         else:
@@ -365,6 +365,10 @@ class Device:
     def describe_configuration(self) -> ConfigDict:
         return {}
 
+    # Can also add stage, unstage, pause, resume
+
+
+class ReadableDevice(Device):
     def read(self) -> ConfigDict:
         return {}
 
@@ -375,10 +379,8 @@ class Device:
         status = Status(asyncio.sleep(0))
         return status
 
-    # Can also add stage, unstage, pause, resume
 
-
-class SettableDevice(Device):
+class SettableDevice(ReadableDevice):
     def set(self, new_position: float, timeout: float = None) -> Status[float]:
         raise NotImplementedError(self)
 
@@ -425,14 +427,6 @@ class FileDetails:
     def full_path(self):
         # TODO: this need windows/linux path conversion, etc.
         return self.file_template % (self.file_path, self.file_name)
-
-
-class FilenameScheme:
-    file_path: Optional[str] = None
-    file_template: str = "%s%s.h5"
-
-    async def new_scan(self):
-        self.file_path = mkdtemp() + os.sep
 
 
 @dataclass
