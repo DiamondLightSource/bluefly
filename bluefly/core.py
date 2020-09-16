@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import os
 import sys
 import threading
 from asyncio import Task
 from dataclasses import dataclass
+from tempfile import mkdtemp
 from typing import (
     Any,
     AsyncGenerator,
@@ -21,6 +23,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    cast,
     get_type_hints,
 )
 
@@ -136,7 +139,7 @@ class SignalR(Signal, Generic[ValueT]):
         # would always be monitored, which is bad for performance
         raise NotImplementedError(self)
 
-    async def observe(self, timeout=None) -> AsyncGenerator[ValueT, None]:
+    async def observe(self) -> AsyncGenerator[ValueT, None]:
         raise NotImplementedError(self)
         yield
 
@@ -225,71 +228,66 @@ class HasSignals:
 SignalProviderT = TypeVar("SignalProviderT", bound=SignalProvider)
 
 
-class SignalCollector:
-    """Collector of Signals from Signalobjes to be used as a context manager:
+InstanceT = TypeVar("InstanceT", bound="_SingletonContextManager")
 
-    with SignalCollector() as sc:
-        sc.add_provider(ca=CAProvider(), set_default=True)
-        t1x = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:X"))
-        t1y = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:Y"))
-        pmac1 = PMAC("BLxxI-MO-PMAC-01")
-        im = PCODetector("BLxxI-EA-DET-01")
-        diff = PilatusDetector("BLxxI-EA-DET-02")
-        tomo_scan = FlyDevice(
-            PmacMasterFlyLogic(pmac=pmac1, motors=[t1x, t1y], detectors=[im, diff])
-        )
-        # Signals get connected and Devices get named at the end of the Context
-    assert t1x.name == "t1x"
-    assert t1x.motor.velocity.connected
-    """
 
-    _instance: ClassVar[Optional["SignalCollector"]] = None
+class _SingletonContextManager:
+    """Pattern where instance exists only during the context manager. Works with
+    both async and regular context manager invocations"""
 
-    def __init__(self):
-        self._providers: Dict[str, SignalProvider] = {}
-        self._names_on_enter: Set[str] = set()
-        self._object_signals: Dict[HasSignals, AwaitableSignals] = {}
+    _instance: ClassVar[Optional["_SingletonContextManager"]] = None
 
-    def _caller_locals(self):
-        """Walk up until we find a stack frame that doesn't have us as self"""
-        try:
-            raise ValueError
-        except ValueError:
-            _, _, tb = sys.exc_info()
-            assert tb, "Can't get traceback, this shouldn't happen"
-            caller_frame = tb.tb_frame
-            while caller_frame.f_locals.get("self", None) is self:
-                caller_frame = caller_frame.f_back
-            return caller_frame.f_locals
+    @classmethod
+    def _get_cls(cls):
+        return cls
 
     def __enter__(self):
-        assert (
-            not SignalCollector._instance
-        ), "Can't nest SignalCollector() context managers"
-        SignalCollector._instance = self
-        # Stash the names that were defined before we
-        self._names_on_enter = set(self._caller_locals())
+        cls = self._get_cls()
+        assert not cls._instance, f"Can't nest {cls} context managers"
+        cls._instance = self
         return self
 
     async def __aenter__(self):
         return self.__enter__()
 
-    async def __aexit__(self, type, value, traceback, locals_d=None):
-        if locals_d is None:
-            locals_d = self._caller_locals()
-        for name, obj in locals_d.items():
-            if name not in self._names_on_enter and isinstance(obj, Device):
-                # We got a device, name it
-                obj.name = name
-        SignalCollector._instance = None
-        # Populate all the Signalobjes
+    async def __aexit__(self, type_, value, traceback):
+        self.__exit__(type_, value, traceback)
+
+    def __exit__(self, type_, value, traceback):
+        self._get_cls()._instance = None
+
+    @classmethod
+    def get_instance(cls: Type[InstanceT]) -> InstanceT:
+        assert (
+            cls._instance
+        ), f"Can only call classmethods of {cls} within a contextmanager"
+        return cast(InstanceT, cls._instance)
+
+
+class SignalCollector(_SingletonContextManager):
+    """Collector of Signals from HasSignals instances to be used as a context manager:
+
+    [async] with SignalCollector():
+        SignalCollector.add_provider(ca=CAProvider(), set_default=True)
+        t1x = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:X"))
+        t1y = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:Y"))
+        # All Signals get connected at the end of the Context
+    assert t1x.motor.velocity.connected
+    """
+
+    def __init__(self):
+        self._providers: Dict[str, SignalProvider] = {}
+        self._object_signals: Dict[HasSignals, AwaitableSignals] = {}
+
+    async def __aexit__(self, type_, value, traceback):
+        super().__exit__(type_, value, traceback)
+        # Populate all the Signals
         awaitables = (self._populate_signals(obj) for obj in self._object_signals)
         await asyncio.gather(*awaitables)
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, type_, value, traceback):
         fut = asyncio.run_coroutine_threadsafe(
-            self.__aexit__(type, value, traceback, self._caller_locals()),
-            loop=get_bluesky_event_loop(),
+            self.__aexit__(type_, value, traceback), loop=get_bluesky_event_loop(),
         )
         event = threading.Event()
         fut.add_done_callback(lambda _: event.set())
@@ -305,13 +303,10 @@ class SignalCollector:
         return obj
 
     @classmethod
-    def _get_current_context(cls) -> "SignalCollector":
-        assert cls._instance, "No current context"
-        return cls._instance
-
     def add_provider(
-        self, set_default: bool = False, **providers: SignalProviderT
+        cls, set_default: bool = False, **providers: SignalProviderT
     ) -> SignalProviderT:
+        self = cls.get_instance()
         assert len(providers) == 1, "Can only add a single provider"
         transport, provider = list(providers.items())[0]
         self._providers[transport] = provider
@@ -336,7 +331,7 @@ class SignalCollector:
                 pass
 
         if details or add_extra_signals:
-            self = cls._get_current_context()
+            self = cls.get_instance()
             split = obj.signal_prefix.split("://", 1)
             if len(split) > 1:
                 transport, signal_prefix = split
@@ -348,6 +343,47 @@ class SignalCollector:
             )
 
 
+class NamedDevices:
+    """Context manager that names Devices after their name in locals().
+
+    [async] with NamedDevices():
+        t1x = SettableMotor(MotorRecord("BLxxI-MO-TABLE-01:X"))
+    assert t1x.name == "t1x"
+    """
+
+    def __init__(self):
+        self._names_on_enter: Set[str] = set()
+
+    def _caller_locals(self):
+        """Walk up until we find a stack frame that doesn't have us as self"""
+        try:
+            raise ValueError
+        except ValueError:
+            _, _, tb = sys.exc_info()
+            assert tb, "Can't get traceback, this shouldn't happen"
+            caller_frame = tb.tb_frame
+            while caller_frame.f_locals.get("self", None) is self:
+                caller_frame = caller_frame.f_back
+            return caller_frame.f_locals
+
+    def __enter__(self):
+        # Stash the names that were defined before we were called
+        self._names_on_enter = set(self._caller_locals())
+        return self
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    def __exit__(self, type, value, traceback):
+        for name, obj in self._caller_locals().items():
+            if name not in self._names_on_enter and isinstance(obj, Device):
+                # We got a device, name it
+                obj.name = name
+
+    async def __aexit__(self, type, value, traceback):
+        return self.__exit__(type, value, traceback)
+
+
 ConfigDict = Dict[str, Dict[str, Any]]
 
 
@@ -357,7 +393,7 @@ class Device:
     parent = None
 
     def configure(self, d: Dict[str, Any]) -> Tuple[ConfigDict, ConfigDict]:
-        pass
+        return ({}, {})
 
     def read_configuration(self) -> ConfigDict:
         return {}
@@ -376,8 +412,7 @@ class ReadableDevice(Device):
         return {}
 
     def trigger(self) -> Status:
-        status = Status(asyncio.sleep(0))
-        return status
+        raise NotImplementedError(self)
 
 
 class SettableDevice(ReadableDevice):
@@ -418,21 +453,66 @@ class RemainingPoints:
         return self.spg.size
 
 
+class FilenameScheme(_SingletonContextManager):
+    """Filenaming scheme for detectors where naming matters:
+
+    [async] with MyFilenameScheme():
+        det = DetectorDriver(...)
+
+    det.stage()
+    det.trigger()
+    # det has called current_prefix() on the FilenameScheme instance
+    """
+
+    _current_prefix: Optional[str] = None
+    _using_current_prefix: bool = False
+
+    @classmethod
+    def _get_cls(cls):
+        # Always store the instance on the base FilenameScheme, so detectors
+        # can get their singleton scheme
+        return FilenameScheme
+
+    async def current_prefix(self) -> str:
+        # Mark someone as using it, this will be called at stage
+        self._using_current_prefix = True
+        if self._current_prefix is None:
+            self._current_prefix = await self._generate_prefix()
+        return self._current_prefix
+
+    async def done_using_prefix(self):
+        # Someone has finished using it, this will be called at stage
+        if self._using_current_prefix:
+            # The first time someone finished using it, make a new one
+            # Subsequent times will not make a new one
+            self._current_prefix = await self._generate_prefix()
+            self._using_current_prefix = False
+
+    async def _generate_prefix(self) -> str:
+        raise NotImplementedError(self)
+
+
+class TmpFilenameScheme(FilenameScheme):
+    """Filenaming scheme that makes a temporary directory on each run"""
+
+    async def _generate_prefix(self) -> str:
+        return mkdtemp() + os.sep
+
+
 @dataclass
-class FileDetails:
+class HDFDatasetResource:
+    """Metadata about an interesting dataset in an HDF file"""
+
+    name: str = "data"
+    dataset_path: str = "/entry/data/data"
+
+
+@dataclass
+class HDFResource:
+    """Describe the path, spec, interesting data, and summary dataset of an HDF file"""
+
+    data: List[HDFDatasetResource]
+    summary: HDFDatasetResource
     file_path: str
-    file_template: str
-    file_name: str
-
-    def full_path(self):
-        # TODO: this need windows/linux path conversion, etc.
-        return self.file_template % (self.file_path, self.file_name)
-
-
-@dataclass
-class DatasetDetails:
-    data_shape: Tuple[int, ...]  # Fastest moving last, e.g. (768, 1024)
-    data_suffix: str = "_data"
-    data_path: str = "/entry/data/data"
-    summary_suffix: str = "_sum"
-    summary_path: str = "/entry/sum"
+    # AD_HDF5 means primary dataset must be /entry/data/data
+    spec: str = "AD_HDF5"

@@ -2,10 +2,8 @@ import asyncio
 import os
 import time
 from enum import Enum
-from tempfile import mkdtemp
 from typing import (
     Any,
-    AsyncGenerator,
     Callable,
     Dict,
     Generator,
@@ -16,24 +14,18 @@ from typing import (
     TypeVar,
 )
 
+import h5py
+import numpy as np
 from event_model import compose_resource
 
 from bluefly.core import (
     ConfigDict,
-    DatasetDetails,
     Device,
-    FileDetails,
+    FilenameScheme,
+    HDFResource,
     ReadableDevice,
     Status,
 )
-
-
-class FilenameScheme:
-    file_path: Optional[str] = None
-    file_template: str = "%s%s.h5"
-
-    async def new_scan(self):
-        self.file_path = mkdtemp() + os.sep
 
 
 class DetectorMode(Enum):
@@ -41,25 +33,24 @@ class DetectorMode(Enum):
 
 
 class DetectorLogic:
-    async def open(self, file_details: FileDetails) -> DatasetDetails:
+    # TODO: should this be an ABC?
+    async def open(self, file_prefix: str) -> HDFResource:
         """Open files, etc"""
         raise NotImplementedError(self)
 
-    async def trigger(self, num: int, offset: int, mode: DetectorMode, exposure: float):
-        """Trigger collection of num points, arranging for them to put them at offset
-        into file. Exposure not used in gated mode"""
-        raise NotImplementedError(self)
-
-    async def collect(
-        self, num: int, offset: int, exposure: float
-    ) -> AsyncGenerator[Sequence[float], None]:
-        """Return the data collected from trigger. Iterator gives a sequence of
-        "summary values" for each batch of frames."""
-        raise NotImplementedError(self)
-        yield 0
-
     async def get_deadtime(self, exposure: float) -> float:
         """Get the deadtime to be added to an exposure time before next trigger"""
+        raise NotImplementedError(self)
+
+    async def arm(self, num: int, offset: int, mode: DetectorMode, exposure: float):
+        """Arm for collection of num points, arranging for them to put them at offset
+        into file. Exposure not used in gated mode. In software mode, acquisition
+        will start immediately"""
+        raise NotImplementedError(self)
+
+    async def collect(self, num: int, callback: Callable[[int], None]):
+        """Return the data collected from trigger. Iterator gives a progress
+        indicator from 1..num whenever data is ready to read"""
         raise NotImplementedError(self)
 
     async def stop(self):
@@ -75,22 +66,22 @@ T = TypeVar("T")
 
 
 class DatumFactory:
-    def __init__(self, name: str, details: FileDetails, datasets: DatasetDetails):
+    def __init__(self, name: str, resource: HDFResource):
         self.point_number = 0
         self._name = name
-        self._details = details
-        self._datasets = datasets
+        self._resource = resource
         self._datum_cache: List[Dict] = []
         self._asset_docs_cache: List[Tuple] = []
-        resource, self._datum_factory, _ = compose_resource(
+        dirname, basename = os.path.split(resource.file_path)
+        resource_d, self._datum_factory, _ = compose_resource(
             start=dict(uid="will be popped below"),
-            spec="AD_HDF5",
-            root=self._details.file_path,
-            resource_path=self._details.full_path()[len(self._details.file_path) :],
+            spec=resource.spec,
+            root=dirname + "/",
+            resource_path=basename,
             resource_kwargs=dict(frame_per_point=1),
         )
-        resource.pop("run_start")
-        self._asset_docs_cache.append(("resource", resource))
+        resource_d.pop("run_start")
+        self._asset_docs_cache.append(("resource", resource_d))
 
     def _yield_from_cache(self, cache: List[T]) -> Generator[T, None, None]:
         items = cache.copy()
@@ -99,14 +90,18 @@ class DatumFactory:
             yield item
 
     @property
-    def data_name(self):
-        return self._name + self._datasets.data_suffix
+    def summary_name(self):
+        return f"{self._name}_{self._resource.summary.name}"
 
     @property
-    def summary_name(self):
-        return self._name + self._datasets.summary_suffix
+    def data_name(self):
+        return f"{self._name}_{self._resource.data[0].name}"
 
-    def register_collections(self, values: Sequence[float]):
+    def register_collections(self, indexes: Sequence[int]):
+        # TODO: might want to move this to read() and collect_datums()
+        with h5py.File(self._resource.file_path, "r") as f:
+            values = f[self._resource.summary.dataset_path][indexes][:]
+            values = np.reshape(values, values.shape[0])
         # TODO: Make this produce a single Page, rather than lots of datums
         for v in values:
             datum = self._datum_factory(
@@ -116,7 +111,9 @@ class DatumFactory:
             now = time.time()
             self._datum_cache.append(
                 dict(
+                    # TODO: how to expose PandA multiple datasets in a single HDF file
                     data={self.data_name: datum["datum_id"], self.summary_name: v},
+                    # TODO: use the timestamps from the HDF file
                     timestamps={self.data_name: now, self.summary_name: now},
                     time=now,
                     filled={self.data_name: False, self.summary_name: True},
@@ -131,12 +128,14 @@ class DatumFactory:
         yield from self._yield_from_cache(self._asset_docs_cache)
 
     def describe(self) -> ConfigDict:
+        with h5py.File(self._resource.file_path, "r") as f:
+            data_shape = f[self._resource.data[0].dataset_path].shape
         return {
             self.data_name: dict(
                 external="FILESTORE:",
                 dtype="array",
                 # TODO: shouldn't have to add extra dim here to be compatible with AD
-                shape=(1,) + tuple(self._datasets.data_shape),
+                shape=(1,) + tuple(data_shape),
                 source="an HDF file",
             ),
             self.summary_name: dict(
@@ -154,14 +153,13 @@ class DatumFactory:
 
 
 class DetectorDevice(ReadableDevice):
-    def __init__(self, logic: DetectorLogic, scheme: FilenameScheme):
+    def __init__(self, logic: DetectorLogic):
         self.logic = logic
         self._when_configured = time.time()
         self._exposure = 0.1
         self._watchers: List[Callable] = []
         self._factory: Optional[DatumFactory] = None
-        # TODO: should we pass using a context manager?
-        self._scheme = scheme
+        self._scheme = FilenameScheme.get_instance()
 
     def configure(self, d: Dict[str, Any]) -> Tuple[ConfigDict, ConfigDict]:
         old_config = self.read_configuration()
@@ -186,8 +184,11 @@ class DetectorDevice(ReadableDevice):
 
     def unstage(self) -> List[Device]:
         # TODO: would be good to return a Status object here
-        asyncio.create_task(self.logic.close())
+        asyncio.create_task(self._unstage())
         return [self]
+
+    async def _unstage(self):
+        await asyncio.gather(self.logic.close(), self._scheme.done_using_prefix())
 
     @property
     def hints(self):
@@ -216,12 +217,10 @@ class DetectorDevice(ReadableDevice):
 
         if self._factory is None:
             # beginning of the scan, open the file
-            await self._scheme.new_scan()
-            details = FileDetails(
-                self._scheme.file_path, self._scheme.file_template, self.name
-            )
-            datasets = await self.logic.open(details)
-            self._factory = DatumFactory(self.name, details, datasets)
+            assert self.name
+            file_prefix = await self._scheme.current_prefix()
+            resource = await self.logic.open(file_prefix + self.name)
+            self._factory = DatumFactory(self.name, resource)
 
         async def update_watchers():
             for _ in range(int(self._exposure / 0.1) + 1):
@@ -239,24 +238,19 @@ class DetectorDevice(ReadableDevice):
                     )
                 await asyncio.sleep(0.1)
 
-        await self.logic.trigger(
-            1, self._factory.point_number, DetectorMode.SOFTWARE, self._exposure
-        )
+        offset = self._factory.point_number
+        await self.logic.arm(1, offset, DetectorMode.SOFTWARE, self._exposure)
         t = asyncio.create_task(update_watchers())
-        async for value in self.logic.collect(
-            1, self._factory.point_number, timeout=self._exposure + 60
-        ):
-            self._factory.register_collections(value)
-        t.cancel()
+        try:
 
+            def callback(counter):
+                self._factory.register_collections([counter + offset - 1])
 
-async def open_detectors(
-    detector_details: Dict[DetectorDevice, FileDetails]
-) -> Dict[DetectorDevice, DatasetDetails]:
-    coros = [det.logic.open(details) for det, details in detector_details.items()]
-    datasets = await asyncio.gather(*coros)
-    datasets_dict = dict(zip(detector_details, datasets))
-    return datasets_dict
+            await asyncio.wait_for(
+                self.logic.collect(1, callback), timeout=60 + self._exposure
+            )
+        finally:
+            t.cancel()
 
 
 async def arm_detectors_triggered(
@@ -264,30 +258,24 @@ async def arm_detectors_triggered(
 ):
     async def arm_detector(det: DetectorDevice):
         exposure = period - await det.logic.get_deadtime(period)
-        await det.logic.trigger(num, offset, DetectorMode.TRIGGERED, exposure)
+        await det.logic.arm(num, offset, DetectorMode.TRIGGERED, exposure)
 
     await asyncio.gather(*[arm_detector(det) for det in detectors])
 
 
 async def collect_detectors(
-    detectors: Sequence[DetectorDevice],
-    num: int,
-    offset: int,
-    queue: "asyncio.Queue[Tuple[str, Sequence[float]]]",
-    timeout: float,
+    detectors: Sequence[DetectorDevice], num: int, callback: Callable[[str, int], None],
 ):
-    async def collect_and_report_step(det: DetectorDevice):
+    coros = []
+    for det in detectors:
         assert det.name
-        async for value in det.logic.collect(num, offset, timeout):
-            queue.put_nowait((det.name, value))
 
-    coros = [collect_and_report_step(det) for det in detectors]
+        def det_callback(step, name=det.name):
+            callback(name, step)
+
+        coros.append(det.logic.collect(num, det_callback))
     await asyncio.gather(*coros)
 
 
 async def stop_detectors(detectors: Sequence[DetectorDevice]):
     await asyncio.gather(*[det.logic.stop() for det in detectors])
-
-
-async def close_detectors(detectors: Sequence[DetectorDevice]):
-    await asyncio.gather(*[det.logic.close() for det in detectors])

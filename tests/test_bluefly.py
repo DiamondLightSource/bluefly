@@ -19,7 +19,7 @@ from bluefly import (
     pmac,
     pmac_sim,
 )
-from bluefly.core import SignalCollector
+from bluefly.core import NamedDevices, SignalCollector, TmpFilenameScheme
 from bluefly.simprovider import SimProvider
 
 
@@ -27,27 +27,22 @@ from bluefly.simprovider import SimProvider
 async def test_fly_scan():
     # need to do this so SimProvider can get it for making queues
     set_bluesky_event_loop(asyncio.get_running_loop())
-    async with SignalCollector() as sc:
-        sim = sc.add_provider(sim=SimProvider(), set_default=True)
+    async with SignalCollector(), NamedDevices(), TmpFilenameScheme():
+        sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
         pmac1 = pmac.PMAC("BLxxI-MO-PMAC-01:")
         t1x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
         t1y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
         t1z = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
-        scheme = detector.FilenameScheme()
-        det = detector.DetectorDevice(
-            areadetector.AndorLogic(
-                areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
-                areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
-            ),
-            scheme,
+        det_logic = areadetector.AndorLogic(
+            areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
+            areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
         )
-        scan = fly.FlyDevice(
-            [det], fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]), scheme
-        )
+        det = detector.DetectorDevice(det_logic)
+        scan = fly.FlyDevice([det], fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
     assert t1x.name == "t1x"
     assert scan.name == "scan"
     # Fill in the trajectory logic
-    areadetector_sim.sim_detector_logic(sim, det.logic.driver, det.logic.hdf, t1x, t1y)
+    areadetector_sim.sim_detector_logic(sim, det_logic.driver, det_logic.hdf, t1x, t1y)
     pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x, b=t1y)
     # Configure a scan
     generator = CompoundGenerator(
@@ -64,7 +59,7 @@ async def test_fly_scan():
         s = scan.complete()
         s.watch(m)
         assert not s.done
-        await asyncio.sleep(0.75)
+        await asyncio.sleep(1.25)
         m.assert_called_once_with(
             name="scan",
             current=1,
@@ -72,10 +67,10 @@ async def test_fly_scan():
             target=6,
             unit="",
             precision=0,
-            time_elapsed=pytest.approx(0.5, abs=0.2),
+            time_elapsed=pytest.approx(1.0, abs=0.2),
             fraction=1 / 6,
         )
-        assert await t1x.motor.readback.get() == 1.5
+        assert await t1x.motor.readback.get() == 2.0
         scan.pause()
         m.reset_mock()
         assert not s.done
@@ -96,10 +91,10 @@ async def test_fly_scan():
         await asyncio.sleep(2.75)
         assert s.done
         assert s.success
-        assert m.call_count == 5  # 2..6
-        assert m.call_args_list[-1][1]["current"] == 6
-        assert m.call_args_list[-1][1]["time_elapsed"] == pytest.approx(
-            0.75 + 0.75 + 5 * 0.5, abs=0.3
+        assert m.call_count == 3  # 2..6
+        assert [c[1]["current"] for c in m.call_args_list] == [2, 4, 6]
+        assert [c[1]["time_elapsed"] for c in m.call_args_list] == pytest.approx(
+            [3, 4, 4.5], abs=0.3
         )
         assert await t1x.motor.readback.get() == 2.0
         done.assert_called_once_with(s)
@@ -112,8 +107,8 @@ async def test_fly_scan():
 async def test_motor_moving():
     # need to do this so SimProvider can get it for making queues
     set_bluesky_event_loop(asyncio.get_running_loop())
-    async with SignalCollector() as sc:
-        sim = sc.add_provider(sim=SimProvider(), set_default=True)
+    async with SignalCollector(), NamedDevices():
+        sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
         x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
     motor_sim.sim_motor_logic(sim, x)
 
@@ -160,15 +155,13 @@ async def test_motor_moving():
 async def test_areadetector_step_scan():
     # need to do this so SimProvider can get it for making queues
     set_bluesky_event_loop(asyncio.get_running_loop())
-    async with SignalCollector() as sc:
-        sim = sc.add_provider(sim=SimProvider(), set_default=True)
-        scheme = detector.FilenameScheme()
+    async with SignalCollector(), TmpFilenameScheme(), NamedDevices():
+        sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
         det = detector.DetectorDevice(
             areadetector.AndorLogic(
                 areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
                 areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
-            ),
-            scheme,
+            )
         )
         x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
         y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
@@ -177,7 +170,6 @@ async def test_areadetector_step_scan():
     areadetector_sim.sim_detector_logic(sim, det.logic.driver, det.logic.hdf, x, y)
 
     assert det.stage() == [det]
-    assert scheme.file_path is None
     det.configure(dict(exposure=1.0))
     now = time.time()
     await det.trigger()
@@ -191,7 +183,7 @@ async def test_areadetector_step_scan():
                 "path_semantics": "posix",
                 "resource_kwargs": {"frame_per_point": 1},
                 "resource_path": "det.h5",
-                "root": scheme.file_path,
+                "root": await det._scheme.current_prefix(),
                 "spec": "AD_HDF5",
                 "uid": ANY,
             },
@@ -224,3 +216,7 @@ async def test_areadetector_step_scan():
     assert f["/entry/data/data"].shape == (2, 240, 320)
     assert f["/entry/sum"][1][0][0] == 9726824.0
     assert np.sum(f["/entry/data/data"][1]) == 9726824.0
+    assert det.unstage() == [det]
+    # Wait for HDF file to be closed, can't actually check this, but it stops
+    # "Task was destroyed but it is pending!" messages
+    await asyncio.sleep(0.5)

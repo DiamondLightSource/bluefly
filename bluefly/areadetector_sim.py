@@ -48,12 +48,12 @@ def sim_detector_logic(
 
     @p.on_call(hdf.start)
     async def do_hdf_start():
-        path = p.get_value(hdf.file_template) % (
+        file_path = p.get_value(hdf.file_template) % (
             p.get_value(hdf.file_path),
             p.get_value(hdf.file_name),
         )
         nonlocal hdf_file
-        hdf_file = h5py.File(path, "w", libver="latest")
+        hdf_file = h5py.File(file_path, "w", libver="latest")
         # Data written in a big stack, growing in that dimension
         hdf_file.create_dataset(
             DATA_PATH,

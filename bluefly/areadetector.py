@@ -1,11 +1,17 @@
 import asyncio
+import os
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Sequence
+from typing import Callable, List
 
-import h5py
-
-from bluefly.core import HasSignals, SignalR, SignalRW, SignalX
-from bluefly.detector import DatasetDetails, DetectorLogic, DetectorMode, FileDetails
+from bluefly.core import (
+    HasSignals,
+    HDFDatasetResource,
+    HDFResource,
+    SignalR,
+    SignalRW,
+    SignalX,
+)
+from bluefly.detector import DetectorLogic, DetectorMode
 
 
 class DetectorDriver(HasSignals):
@@ -37,12 +43,14 @@ class HDFWriter(HasSignals):
     array_counter: SignalRW[int]
 
 
-async def open_hdf_file(hdf: HDFWriter, file_details: FileDetails) -> asyncio.Task:
+async def open_hdf_file(hdf: HDFWriter, resource: HDFResource) -> asyncio.Task:
+    # TODO: translate linux/windows paths
+    dirname, basename = os.path.split(resource.file_path)
     await asyncio.gather(
         # Setup filename
-        hdf.file_template.set(file_details.file_template),
-        hdf.file_path.set(file_details.file_path),
-        hdf.file_name.set(file_details.file_name),
+        hdf.file_template.set("%s%s"),
+        hdf.file_path.set(dirname + "/"),
+        hdf.file_name.set(basename),
         # Capture forever
         hdf.num_capture.set(0),
         # Put them in the place given by the uniqueId to support rewind
@@ -54,27 +62,33 @@ async def open_hdf_file(hdf: HDFWriter, file_details: FileDetails) -> asyncio.Ta
 
 
 async def hdf_flush_and_observe(
-    hdf: HDFWriter, num: int, timeout: float
-) -> AsyncGenerator[int, None]:
-    async def flush_every_second():
-        while True:
-            await asyncio.sleep(1)
-            await hdf.flush_now()
+    hdf: HDFWriter, num: int, callback: Callable[[int], None]
+):
+    counters: List[int] = []
 
-    flush_task = asyncio.create_task(flush_every_second())
+    async def flush_and_callback():
+        await hdf.flush_now()
+        if counters:
+            callback(counters[-1])
+            counters.clear()
+
+    async def period_flush_and_callback():
+        while True:
+            # Every second flush and callback progress if changed
+            await asyncio.gather(asyncio.sleep(1), flush_and_callback())
+
+    flush_task = asyncio.create_task(period_flush_and_callback())
     try:
-        async for counter in hdf.array_counter.observe(timeout):
-            # TODO: we might skip some uids, should fill them in here
-            if counter != 0:
-                # uid starts from 0, counter from 1
-                yield counter - 1
+        async for counter in hdf.array_counter.observe():
+            # TODO: handle dropped frame counter too
+            if counter > 0:
+                counters.append(counter)
             if counter == num:
-                # This won't pick up last frame dropped, but that's probably ok
                 break
     finally:
         flush_task.cancel()
-    # One last flush to make sure everything has cleared
-    await hdf.flush_now()
+    # One last flush and callback to make sure everything has cleared
+    await flush_and_callback()
 
 
 async def setup_n_frames(
@@ -109,24 +123,27 @@ class AndorLogic(DetectorLogic):
     driver: DetectorDriver
     hdf: HDFWriter
     _hdf_start_task: asyncio.Task = field(init=False)
-    _hdf_path: str = field(init=False)
 
-    async def open(self, file_details: FileDetails) -> DatasetDetails:
-        self._hdf_start_task = await open_hdf_file(self.hdf, file_details)
-        self._hdf_path = file_details.full_path()
-        return DatasetDetails(
-            data_shape=await asyncio.gather(
-                self.driver.array_size_y.get(), self.driver.array_size_x.get(),
-            ),
+    async def open(self, file_prefix: str) -> HDFResource:
+        resource = HDFResource(
+            data=[HDFDatasetResource()],
+            summary=HDFDatasetResource("sum", "/entry/sum"),
+            file_path=file_prefix + ".h5",
         )
+        self._hdf_start_task = await open_hdf_file(self.hdf, resource)
+        return resource
 
-    async def trigger(self, num: int, offset: int, mode: DetectorMode, exposure: float):
-        # Choose the right Andor specific trigger mode
+    async def get_deadtime(self, exposure: float) -> float:
+        # Might need to prod the driver to do these calcs
+        return calc_deadtime(exposure, readout_time=0.02, frequency_accuracy=50)
+
+    async def arm(self, num: int, offset: int, mode: DetectorMode, exposure: float):
+        # Choose the right Andor specific trigger mode (made up examples)
         await self.driver.trigger_mode.set(
             {
-                DetectorMode.SOFTWARE: "Software",
+                DetectorMode.SOFTWARE: "Immediate",
                 DetectorMode.TRIGGERED: "External",
-                DetectorMode.GATED: "Gate",
+                DetectorMode.GATED: "Gated",
             }[mode]
         )
         # Setup driver and HDF writer for n frames
@@ -137,20 +154,9 @@ class AndorLogic(DetectorLogic):
         # Kick off the driver to take data
         asyncio.create_task(self.driver.start())
 
-    async def collect(
-        self, num: int, offset: int, timeout: float
-    ) -> AsyncGenerator[Sequence[float], None]:
-        # monitor progress
-        async for i in hdf_flush_and_observe(self.hdf, num, timeout):
-            dset = h5py.File(self._hdf_path, "r")["/entry/sum"]
-            while dset.shape[0] <= i + offset:
-                await asyncio.sleep(0.1)
-                dset.id.refresh()
-            yield [float(dset[i + offset][0][0])]
-
-    async def get_deadtime(self, exposure: float) -> float:
-        # Might need to prod the driver to do these calcs
-        return calc_deadtime(exposure, readout_time=0.02, frequency_accuracy=50)
+    async def collect(self, num: int, callback: Callable[[int], None]):
+        # Monitor progress, calling back on each flush
+        await hdf_flush_and_observe(self.hdf, num, callback)
 
     async def stop(self):
         await self.driver.stop()

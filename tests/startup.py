@@ -16,7 +16,7 @@ from bluefly import (
     pmac,
     pmac_sim,
 )
-from bluefly.core import SignalCollector
+from bluefly.core import NamedDevices, SignalCollector, TmpFilenameScheme
 from bluefly.simprovider import SimProvider
 
 RE = RunEngine({})
@@ -46,9 +46,9 @@ RE.subscribe(spy)
 # Make a progress bar
 RE.waiting_hook = ProgressBarManager()
 
-with SignalCollector() as sc:
+with SignalCollector(), NamedDevices(), TmpFilenameScheme():
     # All Signals with a sim:// prefix or without a prefix will come from this provider
-    sim = sc.add_provider(sim=SimProvider(), set_default=True)
+    sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
     # A PMAC has a trajectory scan interface and 16 Co-ordinate systems
     # which may have motors in them
     pmac1 = pmac.PMAC("BLxxI-MO-PMAC-01:")
@@ -57,17 +57,14 @@ with SignalCollector() as sc:
     t1y = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Y"))
     t1z = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:Z"))
     # Simulated detector
-    scheme = detector.FilenameScheme()
     andor_logic = areadetector.AndorLogic(
         areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
         areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
     )
-    andor = detector.DetectorDevice(andor_logic, scheme)
+    andor = detector.DetectorDevice(andor_logic)
     # Define a flyscan that can move any combination of these 3 motors which
     # are required to be in the same CS on the pmac
-    mapping = fly.FlyDevice(
-        [andor], fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]), scheme
-    )
+    mapping = fly.FlyDevice([andor], fly.PMACMasterFlyLogic(pmac1, [t1x, t1y, t1z]))
     # Signals are connected (in a blocking way) at the end of the with block
     # and all the Devices in locals() have their names filled in
 

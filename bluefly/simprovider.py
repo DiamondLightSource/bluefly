@@ -49,11 +49,11 @@ class SimSignalR(SignalR[ValueT], SimSignal):
     async def get(self) -> ValueT:
         return self._store.values[id(self)]
 
-    async def observe(self, timeout=None) -> AsyncGenerator[ValueT, None]:
+    async def observe(self) -> AsyncGenerator[ValueT, None]:
         id_self = id(self)
         while True:
             yield self._store.values[id_self]
-            await asyncio.wait_for(self._store.events[id_self].wait(), timeout)
+            await self._store.events[id_self].wait()
 
 
 class SimSignalW(SignalW[ValueT], SimSignal):

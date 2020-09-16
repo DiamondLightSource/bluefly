@@ -4,10 +4,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
 
+import numpy as np
 from scanpointgenerator import CompoundGenerator
 
 from bluefly import detector, motor, pmac
-from bluefly.core import ConfigDict, Device, FileDetails, RemainingPoints, Status
+from bluefly.core import ConfigDict, Device, RemainingPoints, Status
 from bluefly.detector import DatumFactory, DetectorDevice, FilenameScheme
 
 
@@ -17,10 +18,10 @@ class FlyLogic:
         detectors: Sequence[DetectorDevice],
         points: RemainingPoints,
         offset: int,
-        queue: "asyncio.Queue[Tuple[str, Sequence[float]]]",
+        callback: Callable[[str, int], None],
     ):
         """Scan the given points, putting them at offset into file. Progress updates
-        should be put on the queue"""
+        should call callback """
         raise NotImplementedError(self)
 
     async def stop(self, detectors: Sequence[DetectorDevice]):
@@ -34,10 +35,7 @@ class FlyDevice(Device):
     """Generic fly scan device that wraps some custom routines"""
 
     def __init__(
-        self,
-        detectors: Sequence[DetectorDevice],
-        logic: FlyLogic,
-        scheme: FilenameScheme,
+        self, detectors: Sequence[DetectorDevice], logic: FlyLogic,
     ):
         assert detectors, "Need at least one detector"
         self._detectors = detectors
@@ -54,8 +52,7 @@ class FlyDevice(Device):
         self._pause_task: Optional[asyncio.Task] = None
         self._resuming = False
         self._factories: Dict[str, DatumFactory] = {}
-        # TODO: should we pass using a context manager?
-        self._scheme = scheme
+        self._scheme = FilenameScheme.get_instance()
 
     def configure(self, d: Dict[str, Any]) -> Tuple[ConfigDict, ConfigDict]:
         old_config = self.read_configuration()
@@ -83,8 +80,12 @@ class FlyDevice(Device):
 
     def unstage(self) -> List[Device]:
         # TODO: would be good to return a Status object here
-        asyncio.create_task(detector.close_detectors(self._detectors))
+        asyncio.create_task(self._unstage())
         return [self]
+
+    async def _unstage(self):
+        det_coros = [det.logic.close() for det in self._detectors]
+        await asyncio.gather(self._scheme.done_using_prefix(), *det_coros)
 
     def collect(self) -> Generator[Dict[str, ConfigDict], None, None]:
         for factory in self._factories.values():
@@ -123,19 +124,15 @@ class FlyDevice(Device):
             if not self._factories:
                 # beginning of the scan, open the file
                 self._start_offset = 0
-                await self._scheme.new_scan()
-                detector_details = {
-                    det: FileDetails(
-                        self._scheme.file_path, self._scheme.file_template, det.name
-                    )
-                    for det in self._detectors
-                }
-                datasets = await detector.open_detectors(detector_details)
-                for det, dataset in datasets.items():
+                file_prefix = await self._scheme.current_prefix()
+                coros = []
+                for det in self._detectors:
                     assert det.name
-                    self._factories[det.name] = DatumFactory(
-                        det.name, detector_details[det], dataset
-                    )
+                    coros.append(det.logic.open(file_prefix + det.name))
+                resources = await asyncio.gather(*coros)
+                for det, resource in zip(self._detectors, resources):
+                    assert det.name
+                    self._factories[det.name] = DatumFactory(det.name, resource)
 
     def pause(self):
         # TODO: would be good to return a Status object here
@@ -153,19 +150,26 @@ class FlyDevice(Device):
         return status
 
     async def _complete(self):
-        points = RemainingPoints(self._generator, self._completed_steps)
+        completed_at_start = self._completed_steps
+        points = RemainingPoints(self._generator, completed_at_start)
         queue: asyncio.Queue[int] = asyncio.Queue()
 
-        async def update_watchers(completed_at_start):
-            steps: Dict[str, float] = {
+        async def update_watchers():
+            steps: Dict[str, int] = {
                 det.name: completed_at_start for det in self._detectors
+            }
+            last_updated: Dict[str, float] = {
+                det.name: time.time() for det in self._detectors
             }
 
             while self._completed_steps < self._total_steps:
-                name, values = await queue.get()
+                oldest_det = time.time() - min(last_updated.values())
+                # Allow the oldest detector to be up to 60s + exposure behind
+                timeout = 60 + self._generator.duration - oldest_det
+                name, step = await asyncio.wait_for(queue.get(), timeout)
                 factory = self._factories[name]
-                factory.register_collections(values)
-                steps[name] += len(values)
+                factory.register_collections(np.arange(steps[name], step))
+                steps[name] = step
                 new_completed_steps = min(steps.values())
                 if new_completed_steps > self._completed_steps:
                     self._completed_steps = new_completed_steps
@@ -187,9 +191,11 @@ class FlyDevice(Device):
                 self._detectors,
                 points,
                 self._start_offset + self._completed_steps,
-                queue,
+                lambda name, steps: queue.put_nowait(
+                    (name, steps + completed_at_start)
+                ),
             ),
-            update_watchers(self._completed_steps),
+            update_watchers(),
         )
         self._start_offset += self._total_steps
 
@@ -204,7 +210,7 @@ class PMACMasterFlyLogic(FlyLogic):
         detectors: Sequence[DetectorDevice],
         points: RemainingPoints,
         offset: int,
-        queue: "asyncio.Queue[Tuple[str, Sequence[float]]]",
+        callback: Callable[[str, int], None],
     ):
         # Prepare the motors and arm detectors
         period, num = points.constant_duration, points.remaining
@@ -216,9 +222,7 @@ class PMACMasterFlyLogic(FlyLogic):
         # Kick off pmac, then show the progress of detectors
         await asyncio.gather(
             pmac.keep_filling_trajectory(self.pmac, tracker),
-            detector.collect_detectors(
-                detectors, num, offset, queue, timeout=period + 60
-            ),
+            detector.collect_detectors(detectors, num, callback),
         )
 
     async def stop(self, detectors: Sequence[DetectorDevice]):
