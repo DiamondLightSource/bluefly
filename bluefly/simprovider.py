@@ -145,6 +145,7 @@ class SimProvider(SignalProvider):
                 else:
                     raise ValueError(f"Can't make {d.value_type}")
                 self._store.values[id(signal)] = value
+                # TODO: why do we need to get_bluesky_event_loop here?
                 self._store.events[id(signal)] = asyncio.Event(
                     loop=get_bluesky_event_loop()
                 )

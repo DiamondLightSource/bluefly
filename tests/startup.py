@@ -46,9 +46,17 @@ RE.subscribe(spy)
 # Make a progress bar
 RE.waiting_hook = ProgressBarManager()
 
+# Running in simulation mode?
+SIM_MODE = True
+
 with SignalCollector(), NamedDevices(), TmpFilenameScheme():
     # All Signals with a sim:// prefix or without a prefix will come from this provider
-    sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
+    if SIM_MODE:
+        sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
+    else:
+        # Do something like this here
+        # ca = SignalCollector.add_provider(ca=CAProvider(), set_default=True)
+        pass
     # A PMAC has a trajectory scan interface and 16 Co-ordinate systems
     # which may have motors in them
     pmac1 = pmac.PMAC("BLxxI-MO-PMAC-01:")
@@ -69,10 +77,13 @@ with SignalCollector(), NamedDevices(), TmpFilenameScheme():
     # and all the Devices in locals() have their names filled in
 
 # Fill in the simulated logic
-pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x, b=t1y)
-for m in (t1x, t1y, t1z):
-    motor_sim.sim_motor_logic(sim, m)
-areadetector_sim.sim_detector_logic(sim, andor_logic.driver, andor_logic.hdf, t1x, t1y)
+if SIM_MODE:
+    pmac_sim.sim_trajectory_logic(sim, pmac1.traj, a=t1x, b=t1y)
+    for m in (t1x, t1y, t1z):
+        motor_sim.sim_motor_logic(sim, m)
+    areadetector_sim.sim_detector_logic(
+        sim, andor_logic.driver, andor_logic.hdf, t1x, t1y
+    )
 
 # Run a step scan
 RE(bp.grid_scan([andor], t1x, 3, 5, 10, t1y, 2, 4, 8))

@@ -93,6 +93,7 @@ together to make a set of logic:
 .. literalinclude:: ../bluefly/fly.py
    :pyobject: PMACMasterFlyLogic
 
+Note, the baseclass FlyLogic is an interface class with only NotImplemented methods.
 
 DetectorDevice
 ~~~~~~~~~~~~~~
@@ -114,6 +115,37 @@ implementation for each detector shouldn't be too verbose:
 
 .. literalinclude:: ../bluefly/areadetector.py
    :pyobject: AndorLogic
+
+Note, the baseclass DetectorLogic is an interface class with only NotImplemented methods.
+
+When using a DetectorDevice in a step scan, it reads the summary data back from
+the HDF file to pass back to bluesky:
+
+.. code-block:: python
+
+    andor_logic = areadetector.AndorLogic(
+        areadetector.DetectorDriver("BLxxI-EA-DET-01:DRV"),
+        areadetector.HDFWriter("BLxxI-EA-DET-01:HDF5"),
+    )
+    andor = detector.DetectorDevice(andor_logic)
+    # Flag that the HDF file needs opening on next trigger
+    andor.stage()
+    # Open the file, then arm and collect a single frame from the detector,
+    # status support progress bar
+    status = andor.trigger()
+    ...
+    # Data and shape read from HDF file
+    andor.describe()
+    andor.read()
+    list(andor.collect_asset_docs())
+    # Take more data after moving motors etc.
+    await andor.trigger()
+    andor.read()
+    await andor.trigger()
+    andor.read()
+    list(andor.collect_asset_docs())
+    # Close the HDF file
+    andor.unstage()
 
 
 MotorDevice
@@ -155,4 +187,45 @@ and their type, and filling in a HasSignals structure with concrete instances:
 
 For instance,
 ``provider.make_signals("BLxxI-MO-TABLE-01:X", {"demand": ..., "readback"...})``
-would provide a dictionary of Signals
+would provide a dictionary of Signals with entries "demand" and "readback" which can
+be set as attributes of the instance.
+
+The mapping from signal prefix and attribute name to PV, is done on a provider
+specific way. I envisage that the CA and PVA structures can be done from PVI_.
+This will expose a single PV with a JSON structure of the PVs (or pairs of PVs) of
+interest in a Device, with name, description, label, widget, and any other metadata
+that can't be got live from EPICS. It is in the progress of being added to areaDetector.
+
+.. _PVI: https://pvi.readthedocs.io/en/latest/
+
+Startup script
+~~~~~~~~~~~~~~
+
+These are all brought together in a typical bluesky startup script:
+
+.. literalinclude:: ../test/startup.py
+
+There are a number of Context Managers active while the Devices are defined, which
+follow a design pattern of defining an instance that can be stored and interacted
+with for the duration of the with statement:
+
+- SignalCollector lets SignalProviders be registered with optional transport prefixes
+  like ``ca://`` to allow signal prefixes to be routed to the correct provider. The
+  HasSignals baseclass uses this to fill in the correct Signals
+- NamedDevices sets device.name to its name as defined in locals()
+- TmpFilenameScheme() is a concrete filename scheme to allow file_prefixes to be
+  created for each scan according to a local scheme
+
+After the definitions, we have a number of bits of simulated logic being added. The
+advantage of the interface classes is that simulations can be written at a Signal
+level rather than having to reimplement any logic. For instance a PMAC trajectory scan::
+
+.. literalinclude:: ../bluefly/sim_pmac.py
+    :pyobject: sim_trajectory_logic
+
+Demo
+~~~~
+
+Running ``pipenv run ipython -i -- test/startup.py`` will run first a step scan of
+a simulated detector (with live plotting), then a flyscan of the same range. Data
+is written from both, but I can't get plotting to work from the flyscan yet.
