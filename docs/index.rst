@@ -203,7 +203,9 @@ Startup script
 
 These are all brought together in a typical bluesky startup script:
 
-.. literalinclude:: ../test/startup.py
+.. literalinclude:: ../tests/startup.py
+   :start-at: # Running in simulation mode
+   :end-before: # Run a step scan
 
 There are a number of Context Managers active while the Devices are defined, which
 follow a design pattern of defining an instance that can be stored and interacted
@@ -218,10 +220,10 @@ with for the duration of the with statement:
 
 After the definitions, we have a number of bits of simulated logic being added. The
 advantage of the interface classes is that simulations can be written at a Signal
-level rather than having to reimplement any logic. For instance a PMAC trajectory scan::
+level rather than having to reimplement any logic. For instance a PMAC trajectory scan:
 
-.. literalinclude:: ../bluefly/sim_pmac.py
-    :pyobject: sim_trajectory_logic
+.. literalinclude:: ../bluefly/pmac_sim.py
+   :pyobject: sim_trajectory_logic
 
 Demo
 ~~~~
@@ -229,3 +231,7 @@ Demo
 Running ``pipenv run ipython -i -- test/startup.py`` will run first a step scan of
 a simulated detector (with live plotting), then a flyscan of the same range. Data
 is written from both, but I can't get plotting to work from the flyscan yet.
+
+.. literalinclude:: ../tests/startup.py
+   :start-at: # Run a step scan
+
