@@ -117,6 +117,7 @@ class DatumFactory:
                     timestamps={self.data_name: now, self.summary_name: now},
                     time=now,
                     filled={self.data_name: False, self.summary_name: True},
+                    point_number=self.point_number,
                 )
             )
             self.point_number += 1
@@ -129,12 +130,12 @@ class DatumFactory:
 
     def describe(self) -> ConfigDict:
         with h5py.File(self._resource.file_path, "r") as f:
-            data_shape = f[self._resource.data[0].dataset_path].shape
+            data_shape = f[self._resource.data[0].dataset_path].shape[1:]
         return {
             self.data_name: dict(
                 external="FILESTORE:",
                 dtype="array",
-                # TODO: shouldn't have to add extra dim here to be compatible with AD
+                # TODO: this should be num frames per point, where to get it from?
                 shape=(1,) + tuple(data_shape),
                 source="an HDF file",
             ),

@@ -1,3 +1,4 @@
+import bluesky.plan_stubs as bps
 import bluesky.plans as bp
 from bluesky import RunEngine
 from bluesky.callbacks.best_effort import BestEffortCallback
@@ -35,8 +36,7 @@ db = Broker.named("mycat")
 
 
 def spy(name, doc):
-    if name == "resource":
-        print(doc)
+    pass
 
 
 # Insert all metadata/data captured into db.
@@ -85,16 +85,40 @@ if SIM_MODE:
         sim, andor_logic.driver, andor_logic.hdf, t1x, t1y
     )
 
+
+def grid_fly(flyer, y, ystart, ystop, ynum, x, xstart, xstop, xnum):
+    generator = CompoundGenerator(
+        generators=[
+            LineGenerator(y.name, "mm", ystart, ystop, ynum),
+            LineGenerator(x.name, "mm", xstart, xstop, xnum),
+        ],
+        duration=0.1,
+    )
+    mapping.configure(dict(generator=generator))
+    md = dict(
+        hints=dict(
+            gridding="rectilinear",
+            dimensions=[([y.name], "primary"), ([x.name], "primary")],
+        ),
+        shape=(ynum, xnum),
+        extents=([ystart, ystop], [xstart, xstop]),
+    )
+    uid = yield from bps.open_run(md)
+    yield from bps.kickoff(flyer, wait=True)
+    yield from bps.collect(flyer, stream=True)
+    yield from bps.complete(flyer, group="flyer")
+    # TODO: how to call collect once a second until complete?
+    for _ in range(int(ynum * xnum * 0.1)):
+        yield from bps.sleep(1)
+        yield from bps.collect(flyer, stream=True)
+    yield from bps.wait(group="flyer")
+    yield from bps.collect(flyer, stream=True)
+    yield from bps.close_run()
+    return uid
+
+
 # Run a step scan
-RE(bp.grid_scan([andor], t1x, 3, 5, 10, t1y, 2, 4, 8))
+RE(bp.grid_scan([andor], t1y, 2, 4, 8, t1x, 3, 5, 10))
 
 # Run a fly scan
-generator = CompoundGenerator(
-    generators=[
-        LineGenerator("t1y", "mm", 2, 4, 8),
-        LineGenerator("t1x", "mm", 3, 5, 10),
-    ],
-    duration=0.1,
-)
-mapping.configure(dict(generator=generator))
-RE(bp.fly([mapping]))
+RE(grid_fly(mapping, t1y, 2, 4, 8, t1x, 3, 5, 10))

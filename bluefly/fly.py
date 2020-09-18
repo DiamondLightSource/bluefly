@@ -87,25 +87,34 @@ class FlyDevice(Device):
         det_coros = [det.logic.close() for det in self._detectors]
         await asyncio.gather(self._scheme.done_using_prefix(), *det_coros)
 
+    @property
+    def hints(self):
+        return dict(fields=[f.summary_name for f in self._factories.values()])
+
     def collect(self) -> Generator[Dict[str, ConfigDict], None, None]:
         for factory in self._factories.values():
             # TODO: add completed_steps in here
             # TODO: what happens about rewind?
-            yield from factory.collect_datums()
+            for datum in factory.collect_datums():
+                # TODO: this is horrible, write it better
+                point = self._generator.get_point(datum.pop("point_number"))
+                for p, v in point.positions.items():
+                    datum["data"][p] = v
+                    datum["filled"][p] = True
+                    datum["timestamps"][p] = time.time()
+                yield datum
 
     def collect_asset_docs(self):
         for factory in self._factories.values():
             yield from factory.collect_asset_docs()
 
     def describe_collect(self) -> Dict[str, ConfigDict]:
-        assert self.name
-        dsets = {name: factory.describe() for name, factory in self._factories.items()}
-        return {
-            self.name: dict(
-                completed_steps=dict(source="progress", dtype="number", shape=[]),
-            ),
-            **dsets,
-        }
+        d = {}
+        for factory in self._factories.values():
+            d.update(factory.describe())
+        for axis in self._generator.axes:
+            d[axis] = dict(source=axis, dtype="number", shape=[])
+        return dict(primary=d)
 
     def kickoff(self) -> Status:
         status = Status(self._kickoff())

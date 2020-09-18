@@ -205,7 +205,7 @@ These are all brought together in a typical bluesky startup script:
 
 .. literalinclude:: ../tests/startup.py
    :start-at: # Running in simulation mode
-   :end-before: # Run a step scan
+   :end-before: def grid_fly
 
 There are a number of Context Managers active while the Devices are defined, which
 follow a design pattern of defining an instance that can be stored and interacted
@@ -224,6 +224,14 @@ level rather than having to reimplement any logic. For instance a PMAC trajector
 
 .. literalinclude:: ../bluefly/pmac_sim.py
    :pyobject: sim_trajectory_logic
+
+Plan
+~~~~
+
+We need a special plan to flyscan that does a periodic collect to flush the graph:
+
+.. literalinclude:: ../tests/startup.py
+   :pyobject: grid_fly
 
 Demo
 ~~~~
