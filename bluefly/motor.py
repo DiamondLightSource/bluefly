@@ -69,11 +69,6 @@ class MotorDevice(SettableDevice):
                         unit=units,
                         precision=precision,
                         time_elapsed=time.time() - start,
-                        # TODO: why do we have to specify fraction?
-                        fraction=abs(
-                            (current_position - old_position)
-                            / (new_position - old_position)
-                        ),
                     )
 
         async def do_set():
@@ -89,6 +84,5 @@ class MotorDevice(SettableDevice):
         return status
 
     def stop(self, *, success=False):
-        # TODO: we should return a status here
         self._set_success = success
         asyncio.create_task(self.motor.stop())

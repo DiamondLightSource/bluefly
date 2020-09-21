@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import (
     Any,
@@ -32,34 +33,33 @@ class DetectorMode(Enum):
     SOFTWARE, TRIGGERED, GATED = range(3)
 
 
-class DetectorLogic:
-    # TODO: should this be an ABC?
+class DetectorLogic(ABC):
+    @abstractmethod
     async def open(self, file_prefix: str) -> HDFResource:
         """Open files, etc"""
-        raise NotImplementedError(self)
 
+    @abstractmethod
     async def get_deadtime(self, exposure: float) -> float:
         """Get the deadtime to be added to an exposure time before next trigger"""
-        raise NotImplementedError(self)
 
+    @abstractmethod
     async def arm(self, num: int, offset: int, mode: DetectorMode, exposure: float):
         """Arm for collection of num points, arranging for them to put them at offset
         into file. Exposure not used in gated mode. In software mode, acquisition
         will start immediately"""
-        raise NotImplementedError(self)
 
+    @abstractmethod
     async def collect(self, num: int, callback: Callable[[int], None]):
         """Return the data collected from trigger. Iterator gives a progress
         indicator from 1..num whenever data is ready to read"""
-        raise NotImplementedError(self)
 
+    @abstractmethod
     async def stop(self):
         """Stop where you are, without closing files"""
-        raise NotImplementedError(self)
 
+    @abstractmethod
     async def close(self):
         """Close any files"""
-        raise NotImplementedError(self)
 
 
 T = TypeVar("T")
@@ -98,11 +98,10 @@ class DatumFactory:
         return f"{self._name}_{self._resource.data[0].name}"
 
     def register_collections(self, indexes: Sequence[int]):
-        # TODO: might want to move this to read() and collect_datums()
+        # might want to move this to read() and collect_datums()
         with h5py.File(self._resource.file_path, "r") as f:
             values = f[self._resource.summary.dataset_path][indexes][:]
             values = np.reshape(values, values.shape[0])
-        # TODO: Make this produce a single Page, rather than lots of datums
         for v in values:
             datum = self._datum_factory(
                 datum_kwargs=dict(point_number=self.point_number)
@@ -111,9 +110,9 @@ class DatumFactory:
             now = time.time()
             self._datum_cache.append(
                 dict(
-                    # TODO: how to expose PandA multiple datasets in a single HDF file
+                    # how to expose PandA multiple datasets in a single HDF file?
                     data={self.data_name: datum["datum_id"], self.summary_name: v},
-                    # TODO: use the timestamps from the HDF file
+                    # should use the timestamps from the HDF file
                     timestamps={self.data_name: now, self.summary_name: now},
                     time=now,
                     filled={self.data_name: False, self.summary_name: True},
@@ -135,7 +134,7 @@ class DatumFactory:
             self.data_name: dict(
                 external="FILESTORE:",
                 dtype="array",
-                # TODO: this should be num frames per point, where to get it from?
+                # this should be num frames per point, where to get it from?
                 shape=(1,) + tuple(data_shape),
                 source="an HDF file",
             ),
@@ -145,7 +144,6 @@ class DatumFactory:
         }
 
     def read(self) -> ConfigDict:
-        # TODO: why are these different?
         data = self._datum_cache[-1]
         return {
             k: dict(value=v, timestamp=data["timestamps"][k])
@@ -184,7 +182,6 @@ class DetectorDevice(ReadableDevice):
         return [self]
 
     def unstage(self) -> List[Device]:
-        # TODO: would be good to return a Status object here
         asyncio.create_task(self._unstage())
         return [self]
 
@@ -235,7 +232,6 @@ class DetectorDevice(ReadableDevice):
                         unit="s",
                         precision=3,
                         time_elapsed=elapsed,
-                        fraction=elapsed / self._exposure,
                     )
                 await asyncio.sleep(0.1)
 

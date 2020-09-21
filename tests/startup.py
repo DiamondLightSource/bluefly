@@ -107,7 +107,6 @@ def grid_fly(flyer, y, ystart, ystop, ynum, x, xstart, xstop, xnum):
     yield from bps.kickoff(flyer, wait=True)
     yield from bps.collect(flyer, stream=True)
     yield from bps.complete(flyer, group="flyer")
-    # TODO: how to call collect once a second until complete?
     for _ in range(int(ynum * xnum * 0.1)):
         yield from bps.sleep(1)
         yield from bps.collect(flyer, stream=True)

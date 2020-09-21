@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
 
@@ -12,7 +13,8 @@ from bluefly.core import ConfigDict, Device, RemainingPoints, Status
 from bluefly.detector import DatumFactory, DetectorDevice, FilenameScheme
 
 
-class FlyLogic:
+class FlyLogic(ABC):
+    @abstractmethod
     async def scan(
         self,
         detectors: Sequence[DetectorDevice],
@@ -22,11 +24,10 @@ class FlyLogic:
     ):
         """Scan the given points, putting them at offset into file. Progress updates
         should call callback """
-        raise NotImplementedError(self)
 
+    @abstractmethod
     async def stop(self, detectors: Sequence[DetectorDevice]):
         """Stop where you are, without retracing or closing files"""
-        raise NotImplementedError(self)
 
 
 # Based on:
@@ -79,7 +80,6 @@ class FlyDevice(Device):
         return [self]
 
     def unstage(self) -> List[Device]:
-        # TODO: would be good to return a Status object here
         asyncio.create_task(self._unstage())
         return [self]
 
@@ -93,10 +93,8 @@ class FlyDevice(Device):
 
     def collect(self) -> Generator[Dict[str, ConfigDict], None, None]:
         for factory in self._factories.values():
-            # TODO: add completed_steps in here
-            # TODO: what happens about rewind?
             for datum in factory.collect_datums():
-                # TODO: this is horrible, write it better
+                # this is horrible, write it better
                 point = self._generator.get_point(datum.pop("point_number"))
                 for p, v in point.positions.items():
                     datum["data"][p] = v
@@ -144,7 +142,6 @@ class FlyDevice(Device):
                     self._factories[det.name] = DatumFactory(det.name, resource)
 
     def pause(self):
-        # TODO: would be good to return a Status object here
         assert self._complete_task, "Trigger not called"
         self._complete_task.cancel()
         self._pause_task = asyncio.create_task(self._logic.stop(self._detectors))
@@ -192,7 +189,6 @@ class FlyDevice(Device):
                             unit="",
                             precision=0,
                             time_elapsed=self._when_updated - self._when_triggered,
-                            fraction=self._completed_steps / self._total_steps,
                         )
 
         await asyncio.gather(

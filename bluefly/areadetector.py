@@ -44,7 +44,7 @@ class HDFWriter(HasSignals):
 
 
 async def open_hdf_file(hdf: HDFWriter, resource: HDFResource) -> asyncio.Task:
-    # TODO: translate linux/windows paths
+    # translate linux/windows paths here
     dirname, basename = os.path.split(resource.file_path)
     await asyncio.gather(
         # Setup filename
@@ -80,7 +80,7 @@ async def hdf_flush_and_observe(
     flush_task = asyncio.create_task(period_flush_and_callback())
     try:
         async for counter in hdf.array_counter.observe():
-            # TODO: handle dropped frame counter too
+            # handle dropped frame counter too
             if counter > 0:
                 counters.append(counter)
             if counter == num:

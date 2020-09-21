@@ -130,7 +130,7 @@ async def move_to_start(
     else:
         raise ValueError(f"No CS given for {cs_port!r}")
     await cs.defer_moves.set(True)
-    # TODO: insert real axis run-up calcs here
+    # insert real axis run-up calcs here
     demands = {cs_axes[axis]: value for axis, value in first_point.positions.items()}
     await cs.demands.set(demands)
     await cs.defer_moves.set(False)

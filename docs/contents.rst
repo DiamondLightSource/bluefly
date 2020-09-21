@@ -5,6 +5,7 @@ Contents
     :caption: Introduction
 
     Introduction <index>
+    discussion
 
 .. toctree::
     :caption: Reference

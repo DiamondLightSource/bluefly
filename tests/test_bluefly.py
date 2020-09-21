@@ -68,7 +68,6 @@ async def test_fly_scan():
             unit="",
             precision=0,
             time_elapsed=pytest.approx(1.0, abs=0.2),
-            fraction=1 / 6,
         )
         assert await t1x.motor.readback.get() == 2.0
         scan.pause()
@@ -76,7 +75,7 @@ async def test_fly_scan():
         assert not s.done
         await asyncio.sleep(0.75)
         assert s.done
-        # TODO: this raises CancelledError at the moment
+        # this raises CancelledError at the moment...
         # assert not s.success
         m.assert_not_called()
         scan.resume()
@@ -133,7 +132,6 @@ async def test_motor_moving():
         unit="mm",
         precision=3,
         time_elapsed=pytest.approx(0.1, abs=0.05),
-        fraction=1 / 5.5,
     )
     await x.trigger()
     assert x.read()["x"]["value"] == 0.55

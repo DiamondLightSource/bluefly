@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import threading
+from abc import ABC, abstractmethod
 from asyncio import Task
 from dataclasses import dataclass
 from tempfile import mkdtemp
@@ -100,7 +101,6 @@ class Status(Generic[ValueT]):
             self._awaitable.result()
         except Exception:
             logging.exception("Failed status")
-            # TODO: if we catch CancelledError here we can't resume. Not sure why
             return False
         else:
             return True
@@ -120,13 +120,14 @@ def _fail(*args, **kwargs):
     )
 
 
-class Signal:
+class Signal(ABC):
     """Signals are like ophyd Signals, but async"""
 
     source: str  # like ca://PV_PREFIX:SIGNAL or panda://172.23.252.201/PCAP/ARM
 
+    @abstractmethod
     async def connected(self) -> bool:
-        raise NotImplementedError(self)
+        """Has the connection to the control system been successful?"""
 
     __lt__ = __le__ = __eq__ = __ge__ = __gt__ = __ne__ = _fail
 
@@ -134,21 +135,25 @@ class Signal:
 class SignalR(Signal, Generic[ValueT]):
     """Signal that can be read from and monitored"""
 
+    @abstractmethod
     async def get(self) -> ValueT:
-        # TODO: could make this not async, but that would mean all signals
-        # would always be monitored, which is bad for performance
-        raise NotImplementedError(self)
+        """The current value"""
 
+    @abstractmethod
     async def observe(self) -> AsyncGenerator[ValueT, None]:
-        raise NotImplementedError(self)
+        """Observe changes to the current value. First update is the
+        current value"""
+        return
         yield
 
 
 class SignalW(Signal, Generic[ValueT]):
     """Signal that can be put to"""
 
+    @abstractmethod
     def set(self, value: ValueT) -> Status[ValueT]:
-        raise NotImplementedError(self)
+        """Send the value to the control system, returning a Status
+        to show when it is done"""
 
 
 class SignalRW(SignalR[ValueT], SignalW[ValueT]):
@@ -158,8 +163,9 @@ class SignalRW(SignalR[ValueT], SignalW[ValueT]):
 class SignalX(Signal):
     """Signal that can be executed"""
 
+    @abstractmethod
     async def __call__(self):
-        raise NotImplementedError(self)
+        """Execute this"""
 
 
 class NotConnectedError(Exception):
@@ -203,7 +209,8 @@ class SignalDetails(Generic[ValueT]):
 AwaitableSignals = Awaitable[Mapping[str, Signal]]
 
 
-class SignalProvider:
+class SignalProvider(ABC):
+    @abstractmethod
     def make_signals(
         self,
         signal_prefix: str,
@@ -213,7 +220,6 @@ class SignalProvider:
         """For each signal detail listed in details, make a Signal of the given
         base_class. If add_extra_signals then include signals not listed in details.
         AttrName will be mapped to attr_name. Return {attr_name: signal}"""
-        raise NotImplementedError(self)
 
 
 class HasSignals:
@@ -280,7 +286,7 @@ class SignalCollector(_SingletonContextManager):
         self._object_signals: Dict[HasSignals, AwaitableSignals] = {}
 
     async def __aexit__(self, type_, value, traceback):
-        super().__exit__(type_, value, traceback)
+        self._get_cls()._instance = None
         # Populate all the Signals
         awaitables = (self._populate_signals(obj) for obj in self._object_signals)
         await asyncio.gather(*awaitables)
@@ -453,7 +459,7 @@ class RemainingPoints:
         return self.spg.size
 
 
-class FilenameScheme(_SingletonContextManager):
+class FilenameScheme(_SingletonContextManager, ABC):
     """Filenaming scheme for detectors where naming matters:
 
     [async] with MyFilenameScheme():
@@ -488,8 +494,9 @@ class FilenameScheme(_SingletonContextManager):
             self._current_prefix = await self._generate_prefix()
             self._using_current_prefix = False
 
+    @abstractmethod
     async def _generate_prefix(self) -> str:
-        raise NotImplementedError(self)
+        """Implement this to make a new file prefix for a scan"""
 
 
 class TmpFilenameScheme(FilenameScheme):
