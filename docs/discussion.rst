@@ -4,26 +4,6 @@ Discussion points
 Bluefly was written to explore some ideas on flyscanning in bluesky. This page lists
 the discussion points that were discovered in its development.
 
-Catching CancelledError in Status.success causes resume to fail
----------------------------------------------------------------
-
-Status wraps an asyncio Task. If it is cancelled, success should be false. However,
-checking the result and catching a CancelledError makes RE.resume() fail::
-
-    ERROR:bluesky:Run aborted
-    Traceback (most recent call last):
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/run_engine.py", line 1341, in _run
-        msg = self._plan_stack[-1].throw(
-    File "/home/tom/Programming/bluefly/tests/startup.py", line 111, in grid_fly
-        yield from bps.sleep(1)
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/plan_stubs.py", line 450, in sleep
-        return (yield Msg('sleep', None, time))
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/run_engine.py", line 1341, in _run
-        msg = self._plan_stack[-1].throw(
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/utils.py", line 120, in <genexpr>
-        gen = (msg for msg in gen)
-    bluesky.utils.FailedStatus: <bluefly.core.Status object at 0x7f4b10126820>
-
 Event loop passing
 ------------------
 
@@ -32,9 +12,13 @@ asyncio primitives (Event, Queue) in the ipython main thread. This fails with:
 
     Got Future <Future pending> attached to a different loop
 
-I think this is because bluesky creates an event loop but doesn't install it. We
-can get round that by doing ``Event(loop=get_bluesky_event_loop())``, but this is
-deprecated and will stop working in Python 3.10.
+I think this is because bluesky creates an event loop but doesn't set it. We
+can fix it by doing:
+
+    RE = RunEngine({})
+    asyncio.set_event_loop(get_bluesky_event_loop())
+
+But I don't know if this has any other side-effects.
 
 
 Some bluesky API methods could accept Status objects
@@ -83,28 +67,13 @@ I can't find a way to do that with the current plan stubs. What I would like to 
     # One last collect to make sure we got everything
     yield from bps.collect(flyer, stream=True)
 
-Also, pause() worked when using the trigger and read interface, but with the flyer
-interface it fails with::
+We need to bps.checkpoint() after every collect() so that resume can continue where
+we left off. Is this expected?
 
-    ERROR:bluesky:Run aborted
-    Traceback (most recent call last):
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/run_engine.py", line 1341, in _run
-        msg = self._plan_stack[-1].throw(
-    File "/home/tom/Programming/bluefly/tests/startup.py", line 111, in grid_fly
-        yield from bps.sleep(1)
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/plan_stubs.py", line 450, in sleep
-        return (yield Msg('sleep', None, time))
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/run_engine.py", line 1341, in _run
-        msg = self._plan_stack[-1].throw(
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/utils.py", line 120, in <genexpr>
-        gen = (msg for msg in gen)
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/run_engine.py", line 1425, in _run
-        new_response = await coro(msg)
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/run_engine.py", line 1891, in _collect
-        return (await current_run.collect(msg))
-    File "/home/tom/.local/share/virtualenvs/bluefly-1fc0e14f/lib/python3.8/site-packages/bluesky/bundlers.py", line 650, in collect
-        seq_num = next(self._sequence_counters[stream_name])
-    KeyError: 'primary'
+Also, what should a paused complete do? At the moment I don't call the status
+callback so that we can resume, then I replace the task of the Status object
+and let it call its callbacks when it completes. Is this correct? Or should
+the plan call complete again?
 
 There is also a question about what to do with rewind. Do we eagerly produce all data
 up to bluesky, or is it better to lag behind in case a beam dump happens and we need

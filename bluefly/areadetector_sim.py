@@ -2,7 +2,6 @@ import asyncio
 
 import h5py
 import numpy as np
-from bluesky.run_engine import get_bluesky_event_loop
 
 from bluefly.areadetector import DetectorDriver, HDFWriter
 from bluefly.motor import MotorDevice
@@ -39,7 +38,7 @@ def sim_detector_logic(
     width: int = 320,
     height: int = 240,
 ):
-    stopping = asyncio.Event(loop=get_bluesky_event_loop())
+    stopping = asyncio.Event()
     # The detector image we will modify for each image (0..255 range)
     blob = make_gaussian_blob(width, height) * 255
     hdf_file = None

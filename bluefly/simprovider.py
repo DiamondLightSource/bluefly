@@ -4,8 +4,6 @@ import asyncio
 import collections.abc
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Mapping, TypeVar
 
-from bluesky.run_engine import get_bluesky_event_loop
-
 from .core import (
     AwaitableSignals,
     Signal,
@@ -145,9 +143,7 @@ class SimProvider(SignalProvider):
                 else:
                     raise ValueError(f"Can't make {d.value_type}")
                 self._store.values[id(signal)] = value
-                self._store.events[id(signal)] = asyncio.Event(
-                    loop=get_bluesky_event_loop()
-                )
+                self._store.events[id(signal)] = asyncio.Event()
             signals[attr_name] = signal
         return signals
 

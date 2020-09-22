@@ -1,7 +1,10 @@
+import asyncio
+
 import bluesky.plan_stubs as bps
 import bluesky.plans as bp
 from bluesky import RunEngine
 from bluesky.callbacks.best_effort import BestEffortCallback
+from bluesky.run_engine import get_bluesky_event_loop
 from bluesky.utils import ProgressBarManager, install_kicker
 from databroker import Broker
 from IPython import get_ipython
@@ -21,6 +24,7 @@ from bluefly.core import NamedDevices, SignalCollector, TmpFilenameScheme
 from bluefly.simprovider import SimProvider
 
 RE = RunEngine({})
+asyncio.set_event_loop(get_bluesky_event_loop())
 
 bec = BestEffortCallback()
 
@@ -106,10 +110,12 @@ def grid_fly(flyer, y, ystart, ystop, ynum, x, xstart, xstop, xnum):
     uid = yield from bps.open_run(md)
     yield from bps.kickoff(flyer, wait=True)
     yield from bps.collect(flyer, stream=True)
+    yield from bps.checkpoint()
     yield from bps.complete(flyer, group="flyer")
     for _ in range(int(ynum * xnum * 0.1)):
         yield from bps.sleep(1)
         yield from bps.collect(flyer, stream=True)
+        yield from bps.checkpoint()
     yield from bps.wait(group="flyer")
     yield from bps.collect(flyer, stream=True)
     yield from bps.close_run()

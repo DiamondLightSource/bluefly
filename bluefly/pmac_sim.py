@@ -1,8 +1,6 @@
 import asyncio
 from typing import Dict, List
 
-from bluesky.run_engine import get_bluesky_event_loop
-
 from bluefly.motor import MotorDevice
 from bluefly.pmac import CS_AXES, PMACRawMotor, PMACTrajectory
 from bluefly.simprovider import SimProvider
@@ -10,7 +8,7 @@ from bluefly.simprovider import SimProvider
 
 def sim_trajectory_logic(p: SimProvider, traj: PMACTrajectory, **motors: MotorDevice):
     """Just enough of a sim to make points_scanned tick at the right rate"""
-    stopping = asyncio.Event(loop=get_bluesky_event_loop())
+    stopping = asyncio.Event()
     times: List[float] = []
     positions: Dict[str, List[float]] = {}
 

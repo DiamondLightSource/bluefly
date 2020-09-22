@@ -25,7 +25,7 @@ from bluefly.simprovider import SimProvider
 
 @pytest.mark.asyncio
 async def test_fly_scan():
-    # need to do this so SimProvider can get it for making queues
+    # need to do this so resume can get it
     set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector(), NamedDevices(), TmpFilenameScheme():
         sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
@@ -54,13 +54,15 @@ async def test_fly_scan():
     )
     scan.configure(dict(generator=generator))
     with patch("bluefly.pmac.BATCH_SIZE", 4):
-        m = Mock()
+        watcher = Mock()
+        done = Mock()
         await scan.kickoff()
         s = scan.complete()
-        s.watch(m)
+        s.watch(watcher)
+        s.add_callback(done)
         assert not s.done
         await asyncio.sleep(1.25)
-        m.assert_called_once_with(
+        watcher.assert_called_once_with(
             name="scan",
             current=1,
             initial=0,
@@ -71,31 +73,24 @@ async def test_fly_scan():
         )
         assert await t1x.motor.readback.get() == 2.0
         scan.pause()
-        m.reset_mock()
+        watcher.reset_mock()
         assert not s.done
         await asyncio.sleep(0.75)
         assert s.done
-        # this raises CancelledError at the moment...
-        # assert not s.success
-        m.assert_not_called()
+        assert not s.success
+        watcher.assert_not_called()
         scan.resume()
-        await scan.kickoff()
-        s = scan.complete()
-        m = Mock()
-        done = Mock()
-        s.watch(m)
-        s.add_callback(done)
         assert not s.done
         done.assert_not_called()
         await asyncio.sleep(2.75)
         assert s.done
         assert s.success
-        assert m.call_count == 3  # 2..6
-        assert [c[1]["current"] for c in m.call_args_list] == [2, 4, 6]
-        assert [c[1]["time_elapsed"] for c in m.call_args_list] == pytest.approx(
+        assert await t1x.motor.readback.get() == 2.0
+        assert watcher.call_count == 3
+        assert [c[1]["current"] for c in watcher.call_args_list] == [2, 4, 6]
+        assert [c[1]["time_elapsed"] for c in watcher.call_args_list] == pytest.approx(
             [3, 4, 4.5], abs=0.3
         )
-        assert await t1x.motor.readback.get() == 2.0
         done.assert_called_once_with(s)
         done.reset_mock()
         s.add_callback(done)
@@ -104,8 +99,6 @@ async def test_fly_scan():
 
 @pytest.mark.asyncio
 async def test_motor_moving():
-    # need to do this so SimProvider can get it for making queues
-    set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector(), NamedDevices():
         sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
         x = motor.MotorDevice(pmac.PMACRawMotor("BLxxI-MO-TABLE-01:X"))
@@ -151,8 +144,6 @@ async def test_motor_moving():
 
 @pytest.mark.asyncio
 async def test_areadetector_step_scan():
-    # need to do this so SimProvider can get it for making queues
-    set_bluesky_event_loop(asyncio.get_running_loop())
     async with SignalCollector(), TmpFilenameScheme(), NamedDevices():
         sim = SignalCollector.add_provider(sim=SimProvider(), set_default=True)
         det = detector.DetectorDevice(

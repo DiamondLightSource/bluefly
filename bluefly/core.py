@@ -71,6 +71,20 @@ class Status(Generic[ValueT]):
         self._callbacks: List[Callback] = []
         self._add_watcher = add_watcher
 
+    @property
+    def task(self) -> Task:
+        assert isinstance(self._awaitable, Task), (
+            f"Awaitable {self._awaitable} has not been converted to a "
+            f"task by calling add_callback"
+        )
+        return self._awaitable
+
+    @task.setter
+    def task(self, task: Task):
+        assert isinstance(task, Task), f"{task} is not a task"
+        self._awaitable = task
+        task.add_done_callback(self._run_callbacks)
+
     def __await__(self):
         yield from self._awaitable.__await__()
 
@@ -87,27 +101,23 @@ class Status(Generic[ValueT]):
 
     @property
     def done(self) -> bool:
-        assert isinstance(
-            self._awaitable, Task
-        ), "Can't get done until add_callback is called"
-        return self._awaitable.done()
+        return self.task.done()
 
     @property
     def success(self) -> bool:
-        assert self.done and isinstance(
-            self._awaitable, Task
-        ), "Status has not completed yet"
+        assert self.done, "Status has not completed yet"
         try:
-            self._awaitable.result()
-        except Exception:
+            self.task.result()
+        except (Exception, asyncio.CancelledError):
             logging.exception("Failed status")
             return False
         else:
             return True
 
     def _run_callbacks(self, task: Task):
-        for callback in self._callbacks:
-            callback(self)
+        if not task.cancelled():
+            for callback in self._callbacks:
+                callback(self)
 
     def watch(self, watcher: Callable):
         if self._add_watcher:

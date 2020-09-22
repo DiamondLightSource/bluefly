@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
 
 import numpy as np
+from bluesky.run_engine import get_bluesky_event_loop
 from scanpointgenerator import CompoundGenerator
 
 from bluefly import detector, motor, pmac
@@ -49,9 +50,8 @@ class FlyDevice(Device):
         self._completed_steps = 0
         self._total_steps = 0
         self._watchers: List[Callable] = []
-        self._complete_task: Optional[asyncio.Task] = None
+        self._complete_status: Optional[Status] = None
         self._pause_task: Optional[asyncio.Task] = None
-        self._resuming = False
         self._factories: Dict[str, DatumFactory] = {}
         self._scheme = FilenameScheme.get_instance()
 
@@ -119,41 +119,39 @@ class FlyDevice(Device):
         return status
 
     async def _kickoff(self):
-        if self._resuming:
-            # Resuming where we last left off
-            self._resuming = False
-        else:
-            # Start from the beginning
-            self._completed_steps = 0
-            self._generator.prepare()
-            self._total_steps = self._generator.size
-            self._when_triggered = time.time()
-            if not self._factories:
-                # beginning of the scan, open the file
-                self._start_offset = 0
-                file_prefix = await self._scheme.current_prefix()
-                coros = []
-                for det in self._detectors:
-                    assert det.name
-                    coros.append(det.logic.open(file_prefix + det.name))
-                resources = await asyncio.gather(*coros)
-                for det, resource in zip(self._detectors, resources):
-                    assert det.name
-                    self._factories[det.name] = DatumFactory(det.name, resource)
+        self._completed_steps = 0
+        self._generator.prepare()
+        self._total_steps = self._generator.size
+        self._when_triggered = time.time()
+        if not self._factories:
+            # beginning of the scan, open the file
+            self._start_offset = 0
+            file_prefix = await self._scheme.current_prefix()
+            coros = []
+            for det in self._detectors:
+                assert det.name
+                coros.append(det.logic.open(file_prefix + det.name))
+            resources = await asyncio.gather(*coros)
+            for det, resource in zip(self._detectors, resources):
+                assert det.name
+                self._factories[det.name] = DatumFactory(det.name, resource)
 
     def pause(self):
-        assert self._complete_task, "Trigger not called"
-        self._complete_task.cancel()
+        assert self._complete_status, "Complete not called"
+        self._complete_status.task.cancel()
         self._pause_task = asyncio.create_task(self._logic.stop(self._detectors))
 
     def resume(self):
+        assert self._complete_status.task.cancelled(), "You didn't call pause"
         assert self._pause_task.done(), "You didn't wait for pause to finish"
-        self._resuming = True
+        self._complete_status.task = get_bluesky_event_loop().create_task(
+            self._complete()
+        )
 
     def complete(self) -> Status:
-        self._complete_task = asyncio.create_task(self._complete())
-        status = Status(self._complete_task, self._watchers.append)
-        return status
+        task = asyncio.create_task(self._complete())
+        self._complete_status = Status(task, self._watchers.append)
+        return self._complete_status
 
     async def _complete(self):
         completed_at_start = self._completed_steps
