@@ -8,12 +8,12 @@ Event loop passing
 ------------------
 
 Early on we create the RE, but don't do anything with it. We then try to create some
-asyncio primitives (Event, Queue) in the ipython main thread. This fails with:
+asyncio primitives (Event, Queue) in the ipython main thread. This fails with::
 
     Got Future <Future pending> attached to a different loop
 
 I think this is because bluesky creates an event loop but doesn't set it. We
-can fix it by doing:
+can fix it by doing::
 
     RE = RunEngine({})
     asyncio.set_event_loop(get_bluesky_event_loop())
