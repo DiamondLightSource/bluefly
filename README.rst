@@ -13,14 +13,14 @@ Full documentation is available at http://bluefly.readthedocs.io
 Source Code
 -----------
 
-Available from http://github.com/dls-controls/bluefly
+Available from http://github.com/DiamondLightSource/bluefly
 
 Installation
 ------------
 
 To start using this project::
 
-    git clone https://github.com/dls-controls/bluefly
+    git clone https://github.com/DiamondLightSource/bluefly
 
 Contributing
 ------------
@@ -32,12 +32,12 @@ License
 APACHE License. (see `LICENSE`_)
 
 
-.. |build_status| image:: https://travis-ci.com/dls-controls/bluefly.svg?branch=master
-    :target: https://travis-ci.com/dls-controls/bluefly
+.. |build_status| image:: https://travis-ci.com/DiamondLightSource/bluefly.svg?branch=master
+    :target: https://travis-ci.com/DiamondLightSource/bluefly
     :alt: Build Status
 
-.. |coverage| image:: https://coveralls.io/repos/github/dls-controls/bluefly/badge.svg?branch=master
-    :target: https://coveralls.io/github/dls-controls/bluefly?branch=master
+.. |coverage| image:: https://coveralls.io/repos/github/DiamondLightSource/bluefly/badge.svg?branch=master
+    :target: https://coveralls.io/github/DiamondLightSource/bluefly?branch=master
     :alt: Test Coverage
 
 .. |pypi_version| image:: https://badge.fury.io/py/bluefly.svg
@@ -49,7 +49,7 @@ APACHE License. (see `LICENSE`_)
     :alt: Documentation
 
 .. _CONTRIBUTING:
-    https://github.com/dls-controls/bluefly/blob/master/CONTRIBUTING.rst
+    https://github.com/DiamondLightSource/bluefly/blob/master/CONTRIBUTING.rst
 
 .. _LICENSE:
-    https://github.com/dls-controls/bluefly/blob/master/LICENSE
+    https://github.com/DiamondLightSource/bluefly/blob/master/LICENSE
